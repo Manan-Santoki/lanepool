@@ -11,6 +11,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 
+from .socks import http_get_via_socks
 from .supervisor import Supervisor
 
 log = logging.getLogger("lanepool.api")
@@ -77,6 +78,22 @@ def make_server(sup: Supervisor) -> ThreadingHTTPServer:
                 "lanes": lanes,
             }
 
+        def _rotation_test(self, attempts: int = 6) -> dict:
+            """Send a few requests through the rotating proxy and report the exit IPs seen."""
+            results = []
+            for _ in range(attempts):
+                try:
+                    body, elapsed = http_get_via_socks(
+                        "127.0.0.1", settings.proxy_port, settings.ip_check_url,
+                        settings.proxy_user, settings.proxy_pass,
+                    )
+                    results.append({"exit_ip": body.splitlines()[0] if body else None,
+                                    "latency_ms": int(elapsed * 1000)})
+                except Exception as exc:  # noqa: BLE001 - report every failure
+                    results.append({"error": str(exc) or exc.__class__.__name__})
+            ips = [r["exit_ip"] for r in results if r.get("exit_ip")]
+            return {"attempts": attempts, "ok": len(ips), "distinct_exit_ips": len(set(ips)), "results": results}
+
         def do_GET(self):  # noqa: N802
             path = self.path.split("?", 1)[0].rstrip("/") or "/"
             if path == "/healthz":
@@ -91,6 +108,8 @@ def make_server(sup: Supervisor) -> ThreadingHTTPServer:
             if path == "/api/lanes":
                 with sup.lock:
                     return self._json(200, [l.to_dict() for l in sup.lanes])
+            if path == "/api/rotation-test":
+                return self._json(200, self._rotation_test())
             if path == "/api/lanes/random":
                 with sup.lock:
                     up = [l for l in sup.lanes if l.status in ("up", "running")]

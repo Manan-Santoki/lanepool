@@ -111,6 +111,7 @@ change that range to `10001-<10000 + LANES>`.
 | GET | `/healthz` | `200` when the rotating proxy runs and at least one lane is up (no auth) |
 | GET | `/api/status` | Summary plus every lane |
 | GET | `/api/lanes` | All lanes |
+| GET | `/api/rotation-test` | Sends 6 requests through the rotating proxy and lists the exit IPs seen |
 | GET | `/api/lanes/random` | A random healthy lane (pick its `port` to pin a request) |
 | GET | `/api/lanes/{name\|port\|index}` | One lane, including its recent wireproxy output |
 | POST | `/api/lanes/{lane}/restart` | Reconnect a lane |

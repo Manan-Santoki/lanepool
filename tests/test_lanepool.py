@@ -190,6 +190,12 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual(status["lanes_total"], 3)
         self.assertEqual(status["unique_exit_ips"], 3)
 
+        # The fake glider doesn't proxy, so every attempt reports an error rather than raising.
+        req = urllib.request.Request(base + "/api/rotation-test", headers={"Authorization": "Basic dTpw"})
+        test = json.load(urllib.request.urlopen(req))
+        self.assertEqual((test["attempts"], test["ok"]), (6, 0))
+        self.assertTrue(all("error" in r for r in test["results"]))
+
     def test_crashing_lane_is_restarted_and_others_stay_up(self):
         sup, _ = self.run_supervisor(2, fail={1})
         self.wait_for(lambda: sup.lanes[0].status == "up" and sup.lanes[1].restarts >= 2)
