@@ -150,6 +150,26 @@ Use `docker-compose.dokploy.yml`. It builds from this repo, joins Dokploy's shar
 To see the dashboard, open an SSH tunnel with `ssh -L 8000:127.0.0.1:8000 your-server`
 and browse to <http://127.0.0.1:8000>.
 
+## Public HTTPS proxy (Dokploy / Traefik)
+
+To use the pool from anywhere without opening extra ports, let Traefik terminate TLS
+and hand the connection to lanepool:
+
+1. Add a DNS record for e.g. `proxy.example.com` pointing at the server, **DNS only**
+   (with Cloudflare, a grey cloud: Cloudflare's proxy doesn't forward `CONNECT`).
+2. Copy [`deploy/traefik-public-proxy.yml`](deploy/traefik-public-proxy.yml) to
+   `/etc/dokploy/traefik/dynamic/lanepool-proxy.yml` and set your hostname.
+3. Use `https://USER:PASS@proxy.example.com` as the proxy URL:
+
+```sh
+curl -x https://USER:PASS@proxy.example.com https://api.ipify.org
+```
+
+The connection to the proxy is encrypted, including the password. Most clients
+support HTTPS proxies: curl, Python `requests` (urllib3 2+), Node's undici
+`ProxyAgent`, and Chrome/Playwright. Use a long random password, because public
+proxies get scanned.
+
 ## Exposing it to other machines
 
 By default every port binds to `127.0.0.1` on the host. To let another server use the

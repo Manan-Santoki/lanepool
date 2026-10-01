@@ -1,0 +1,24 @@
+# Public HTTPS proxy for lanepool behind Dokploy's Traefik.
+#
+# Copy to /etc/dokploy/traefik/dynamic/lanepool-proxy.yml (Traefik reloads it live,
+# lanepool doesn't restart). Replace proxy.example.com with your hostname, whose DNS
+# record must point straight at the server (Cloudflare "DNS only", not proxied:
+# Cloudflare doesn't forward CONNECT requests).
+#
+# Traefik terminates TLS with a Let's Encrypt certificate and passes the raw
+# connection to glider, so clients use https://USER:PASS@proxy.example.com as
+# their proxy URL.
+tcp:
+  routers:
+    lanepool-proxy:
+      entryPoints:
+        - websecure
+      rule: HostSNI(`proxy.example.com`)
+      service: lanepool-proxy
+      tls:
+        certResolver: letsencrypt
+  services:
+    lanepool-proxy:
+      loadBalancer:
+        servers:
+          - address: lanepool:8080
