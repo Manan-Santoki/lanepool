@@ -1,7 +1,6 @@
 .env
-configs/*
-!configs/.gitkeep
-__pycache__/
-*.pyc
-.venv/
-.pytest_cache/
+/lanepool
+*.test
+web/node_modules/
+web/dist/*
+!web/dist/.gitkeep

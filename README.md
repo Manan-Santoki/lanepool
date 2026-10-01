@@ -1,234 +1,177 @@
 # lanepool
 
-**Many VPN exits, one rotating proxy.**
+**A self-hosted rotating proxy over many VPN exits.**
 
-lanepool connects to many VPN servers at the same time (for example 99 Surfshark
-locations) and exposes them as proxies:
-
-- **one rotating proxy** (`:8080`, HTTP and SOCKS5) that sends each new connection
-  through a different exit IP, and
-- **one SOCKS5 port per lane** (`:10001` … `:10099`) when you want to pin requests to
-  a single exit IP.
+lanepool connects to many WireGuard VPN servers at once (for example dozens of
+Surfshark locations, or any provider's WireGuard configs) and puts them behind
+one authenticated HTTP/SOCKS5 proxy. Each VPN connection is a *lane* with its own
+exit IP. Your apps send requests through the proxy, and lanepool spreads them
+across lanes, keeps sessions sticky when asked, avoids lanes a site has blocked,
+and records what happened.
 
 ```
-                                  ┌─► lane :10001 ─► Surfshark al-tia  ─► 31.171.x.x
-your app ─► rotating proxy :8080 ─┼─► lane :10002 ─► Surfshark de-fra  ─► 185.x.x.x
-            (round robin,         ├─► lane :10003 ─► Surfshark us-nyc  ─► 138.x.x.x
-             health checked)      └─► … ×99
+                              ┌─► lane us-nyc ─► 138.x.x.x
+your apps ─► lanepool proxy ──┼─► lane de-fra ─► 185.x.x.x      dashboard: users, live connections,
+  (user:pass, :8080)          ├─► lane jp-tok ─► 45.x.x.x       logs, analytics, alerts, settings
+                              └─► …
 ```
 
-Everything runs in **one unprivileged container**: no `NET_ADMIN`, no kernel WireGuard,
-and no changes to the host's routing. Each lane is a userspace WireGuard client.
+## Features
 
-## How it works
+- **Lanes:** WireGuard tunnels run inside the process (wireguard-go with a
+  userspace network stack). No root, no `NET_ADMIN`, and no changes to the host's
+  routing. DNS is resolved through each lane.
+- **Gentle on providers:** lanes connect one at a time, and a failed lane is retried
+  later with the next key. Repeated failures pause new connections. Working lanes
+  are never restarted on configuration changes. (VPN providers block IPs that
+  open many sessions at once.)
+- **Proxy users** with:
+  - allowed countries and lanes
+  - sticky sessions
+  - bandwidth quotas and expiry dates
+  - concurrent-connection and connections-per-second limits
+  - allowed and denied domains
+  - client IP allowlists
+- **Username parameters** like commercial proxies: `alice-country-us`,
+  `alice-session-abc123` (same exit for 10 minutes), `alice-sessttl-30`, `alice-lane-<id>`.
+- **Burned-IP avoidance:** mark an exit IP as blocked by a domain, from the
+  dashboard or from your app through the API, and lanepool stops using that lane
+  for that domain. Repeated connection failures are detected automatically.
+- **Live connections:** see who is connected, from where, through which exit IP
+  and to which domain, and close any connection.
+- **Logs:** one record per connection (user, client IP, target `host:port` when
+  enabled per user, lane, exit IP, bytes, duration, result), searchable and
+  exportable to CSV. Kept 7 days by default. Also system events and an audit log
+  of every admin action.
+- **Analytics:** traffic and connections over time, and top users, lanes,
+  countries and domains.
+- **Alerts** to Telegram, Discord, Slack or any webhook: too few lanes up, a lane
+  down, a key failing, a user at their quota, the engine offline, or bursts of
+  failed logins.
+- **Admin:**
+  - multiple admins with `admin` and `viewer` roles
+  - scoped API tokens for automation
+  - Prometheus `/metrics`
+  - restart the proxy, single lanes, or all lanes (paced)
+  - maintenance mode
 
-lanepool reuses two existing open-source projects unmodified and adds the glue:
+## Architecture
 
-| Piece | Project | Role |
-|---|---|---|
-| Lanes | [wireproxy](https://github.com/pufferffish/wireproxy) | One process per VPN server; turns a WireGuard config into a local SOCKS5 proxy in userspace |
-| Rotation | [glider](https://github.com/nadoo/glider) | Front proxy that spreads connections across the lanes and skips unhealthy ones |
-| Glue | lanepool (this repo) | Builds the Surfshark configs, supervises and restarts every process, looks up each lane's exit IP, serves the dashboard and API |
+| Component | Role |
+|---|---|
+| `lanepool control` | Dashboard (React + shadcn/ui, embedded), REST API, Postgres |
+| `lanepool engine` | The lanes and the proxy (HTTP CONNECT, plain HTTP and SOCKS5 on one port) |
+| Postgres | Users, settings, keys (encrypted), logs, usage, events |
 
-The official release binaries of both are downloaded at image build time and
-verified against pinned SHA-256 checksums (see the `Dockerfile`).
+The engine pulls its configuration from control and pushes state, connection
+records and usage every two seconds. It never touches the database. Redeploying
+the dashboard therefore doesn't drop VPN sessions, and engines could later run on
+separate exit servers with their own IPs.
 
 ## Quick start (Docker Compose)
 
-1. **Get a Surfshark WireGuard key.** In the Surfshark web app: *VPN → Manual setup →
-   Router (or Desktop) → WireGuard → I don't have a key pair → Generate*. Copy the
-   **private** key. Surfshark allows unlimited devices, but **one key can only stay
-   connected to about 20–24 servers at once**. For more lanes, generate one key pair
-   per 20 lanes and list the extras in `SURFSHARK_PRIVATE_KEYS`, for example 5 keys for 99 lanes.
-
-2. **Configure and start:**
-
-   ```sh
-   git clone https://github.com/Manan-Santoki/lanepool.git
-   cd lanepool
-   cp .env.example .env
-   # edit .env and set SURFSHARK_PRIVATE_KEY=...
-   docker compose up -d
-   ```
-
-3. **Use it:**
-
-   ```sh
-   # rotating: every request can leave from a different IP
-   curl -x http://127.0.0.1:8080 https://api.ipify.org
-   curl -x socks5h://127.0.0.1:8080 https://api.ipify.org
-
-   # pinned: always lane 42
-   curl -x socks5h://127.0.0.1:10042 https://api.ipify.org
-   ```
-
-   Open the dashboard at <http://127.0.0.1:8000>.
-
-Lanes take a few seconds to connect. The dashboard shows each lane's port, location,
-exit IP and latency.
-
-## Configuration
-
-All settings are environment variables in `.env`. See [`.env.example`](.env.example)
-for the full, commented list. The most useful ones:
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `SURFSHARK_PRIVATE_KEY` | – | WireGuard private key from the Surfshark dashboard |
-| `SURFSHARK_PRIVATE_KEYS` | – | More keys, comma separated; lanes are spread evenly across all keys |
-| `LANES` | `99` | Number of lanes (exit IPs) |
-| `COUNTRIES` / `EXCLUDE_COUNTRIES` | – | Comma-separated country codes to include or skip |
-| `SURFSHARK_LOCATIONS` | – | Exact locations in order, e.g. `us-nyc,de-fra,uk-lon` |
-| `INCLUDE_VIRTUAL` | `true` | Include Surfshark "virtual" locations |
-| `BIND_IP` | `127.0.0.1` | Host IP the ports are published on |
-| `PROXY_PORT` | `8080` | Rotating proxy port (HTTP + SOCKS5) |
-| `PROXY_USER` / `PROXY_PASS` | – | Auth for the rotating proxy, every lane and the dashboard |
-| `STRATEGY` | `rr` | `rr` round robin, `dh` same host → same lane, `ha` failover, `lha` lowest latency |
-| `IP_CHECK_INTERVAL` | `600` | Seconds between exit-IP lookups per lane (`0` disables) |
-
-### Choosing lanes
-
-Without filters, lanes are spread across countries first: one location in each of
-about 100 countries, then a second location per country, and so on. The order is
-alphabetical rather than by server load, so **a lane keeps its port across restarts**
-as long as Surfshark's location list doesn't change.
-
-### Other providers
-
-Any WireGuard config works. Put `.conf` files in `./configs/` (mounted read-only at
-`/config/wireguard`). Files become the first lanes in alphabetical order, and
-Surfshark fills the rest up to `LANES`. Leave `SURFSHARK_PRIVATE_KEY` empty to use only
-files. wg-quick-only keys such as `PostUp` are ignored, and addresses are narrowed to
-`/32` and `/128` as wireproxy requires.
-
-### Changing the number of lanes
-
-The compose file publishes ports `10001-10099` for 99 lanes. If you change `LANES`,
-change that range to `10001-<10000 + LANES>`.
-
-## API
-
-| Method | Path | Returns |
-|---|---|---|
-| GET | `/healthz` | `200` while lanepool is running, regardless of lanes; used by the container health check (no auth) |
-| GET | `/readyz` | `200` when the rotating proxy runs and at least one lane is up (no auth) |
-| GET | `/api/status` | Summary plus every lane |
-| GET | `/api/lanes` | All lanes |
-| GET | `/api/rotation-test` | Sends 6 requests through the rotating proxy and lists the exit IPs seen |
-| GET | `/api/lanes/random` | A random healthy lane (pick its `port` to pin a request) |
-| GET | `/api/lanes/{name\|port\|index}` | One lane, including its recent wireproxy output |
-| POST | `/api/lanes/{lane}/restart` | Reconnect a lane |
-| POST | `/api/lanes/{lane}/check` | Re-check a lane's exit IP now |
-
-When `PROXY_USER` and `PROXY_PASS` are set, everything except `/healthz` and `/readyz` requires HTTP
-basic auth with the same credentials.
-
-### Example: Python
-
-```python
-import requests
-
-PROXY = "http://user:pass@127.0.0.1:8080"
-for _ in range(5):
-    r = requests.get("https://api.ipify.org", proxies={"http": PROXY, "https": PROXY})
-    print(r.text)  # a different exit IP each time with STRATEGY=rr
+```sh
+git clone https://github.com/Manan-Santoki/lanepool.git && cd lanepool
+cp .env.example .env
+# fill in LANEPOOL_SECRET, ENGINE_TOKEN and POSTGRES_PASSWORD, e.g. with openssl rand -hex 32
+docker compose up -d
 ```
 
-Round robin rotates per **connection**. HTTP clients that reuse connections, such as
-`requests.Session`, keep the same lane until the connection closes. To rotate per
-request, use a fresh connection each time or pin a lane port explicitly.
-
-## Deploying on Dokploy
-
-Use `docker-compose.dokploy.yml`. It builds from this repo, joins Dokploy's shared
-`dokploy-network` and publishes nothing publicly.
-
-1. Create a Compose service from this GitHub repo with compose path
-   `./docker-compose.dokploy.yml`.
-2. In *Environment*, set at least `SURFSHARK_PRIVATE_KEY`, `PROXY_USER` and `PROXY_PASS`.
-3. Deploy. Other Dokploy apps then use `http://USER:PASS@lanepool:8080`.
-
-To see the dashboard, open an SSH tunnel with `ssh -L 8000:127.0.0.1:8000 your-server`
-and browse to <http://127.0.0.1:8000>.
-
-## Public HTTPS proxy (Dokploy / Traefik)
-
-To use the pool from anywhere without opening extra ports, let Traefik terminate TLS
-and hand the connection to lanepool:
-
-1. Add a DNS record for e.g. `proxy.example.com` pointing at the server, **DNS only**
-   (with Cloudflare, a grey cloud: Cloudflare's proxy doesn't forward `CONNECT`).
-2. Copy [`deploy/traefik-public-proxy.yml`](deploy/traefik-public-proxy.yml) to
-   `/etc/dokploy/traefik/dynamic/lanepool-proxy.yml` and set your hostname.
-3. Use `https://USER:PASS@proxy.example.com` as the proxy URL:
+1. Open <http://127.0.0.1:8000> and create the first admin.
+2. **Providers:**
+   - **Surfshark:** add one or more WireGuard private keys (Surfshark → VPN →
+     Manual setup → Router → WireGuard → generate a key pair) and choose how many
+     locations to use.
+   - **Any provider:** paste wg-quick configs under *WireGuard configs*.
+3. **Users:** create a proxy user. The dashboard shows ready-to-copy proxy URLs.
 
 ```sh
-curl -x https://USER:PASS@proxy.example.com https://api.ipify.org
+curl -x http://USER:PASS@127.0.0.1:8080 https://api.ipify.org          # rotates
+curl -x socks5h://USER-country-de:PASS@127.0.0.1:8080 https://api.ipify.org
+curl -x http://USER-session-job42:PASS@127.0.0.1:8080 https://api.ipify.org  # sticky
 ```
 
-The connection to the proxy is encrypted, including the password. Most clients
-support HTTPS proxies: curl, Python `requests` (urllib3 2+), Node's undici
-`ProxyAgent`, and Chrome/Playwright. Use a long random password, because public
-proxies get scanned.
+### Running the image directly
 
-## Exposing it to other machines
+The image runs `lanepool all` by default (control and engine in one process).
+For two containers, use `lanepool control` and `lanepool engine`, as in
+`docker-compose.yml`.
 
-By default every port binds to `127.0.0.1` on the host. To let another server use the
-pool, set `BIND_IP=0.0.0.0`, **set `PROXY_USER` and `PROXY_PASS`**, and firewall the
-ports so only your application servers can reach them. Otherwise anyone who finds the
-ports can use your VPN account. Don't put the dashboard on the public internet
-without auth.
+| Variable | Used by | Default |
+|---|---|---|
+| `DATABASE_URL` | control | `postgres://lanepool:lanepool@localhost:5432/lanepool?sslmode=disable` |
+| `LANEPOOL_SECRET` | control | required |
+| `ENGINE_TOKEN` | both | required (generated in `all` mode) |
+| `ENGINE_URL` | control | `http://localhost:9090` |
+| `CONTROL_URL` | engine | `http://localhost:8000` |
+| `LISTEN` / `PROXY_LISTEN` / `ENGINE_LISTEN` | | `:8000` / `:8080` / `:9090` |
+| `COOKIE_SECURE` | control | `false`; set `true` behind HTTPS |
+| `TRUSTED_PROXIES` | engine | CIDRs allowed to send PROXY protocol headers |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | control | optional first admin |
 
-## Connection pacing
+Create or reset an admin from the command line:
 
-Providers limit how quickly an account can open new WireGuard sessions. WireGuard
-also has no "disconnect" message, so after a restart the old sessions stay counted
-on the provider's side until they time out. Opening 99 sessions at once, or
-restarting repeatedly, can therefore lock an account out of new connections for
-hours.
+```sh
+docker compose exec control lanepool admin create --email you@example.com
+```
 
-lanepool opens connections gently:
+## Exposing the proxy
 
-- **One at a time.** At most `MAX_CONNECTING` (2) lanes are connecting at once,
-  and starts are `LANE_START_DELAY` (10 s) apart, so 99 lanes take about 17 minutes
-  to come up.
-- **Failed lanes retry later with another key.** A lane that isn't connected after
-  `CONNECT_TIMEOUT` (45 s) is switched off. It's retried after `RETRY_BACKOFF`
-  (5 min, doubling up to 1 h) using the next key in `SURFSHARK_PRIVATE_KEYS`.
-- **Circuit breaker.** After `BREAKER_FAILURES` (5) lanes fail in a row, nothing
-  new is opened for `BREAKER_PAUSE` (15 min). Lanes that already work keep running.
-  The dashboard shows when new connections are paused.
+The engine's port 8080 speaks plain HTTP and SOCKS5. To use it from other
+machines, put TLS in front: [`deploy/traefik-public-proxy.yml`](deploy/traefik-public-proxy.yml)
+turns Traefik into an HTTPS proxy endpoint (`https://USER:PASS@proxy.example.com`)
+and passes real client IPs to lanepool with PROXY protocol. Always use strong
+proxy passwords; open proxies are found and abused within hours.
 
-Avoid unnecessary redeploys: each one reconnects every lane.
+### Dokploy
 
-## Resources
+Use [`deploy/docker-compose.dokploy.yml`](deploy/docker-compose.dokploy.yml) as
+the compose path:
+- **Dashboard:** add a domain for service `control`, port `8000`.
+- **Proxy for other Dokploy apps:** `http://USER:PASS@lanepool:8080`.
+- **Public HTTPS proxy:** use the Traefik file above.
 
-Each lane is a separate wireproxy process using roughly 15–40 MB of RAM, so 99 lanes
-need about 2–4 GB. Start with fewer lanes (`LANES=10`) on small machines.
+## For apps
 
-## Limits and responsible use
+Create an API token in *Settings → API tokens*, then:
 
-- **VPN IPs are well known.** Many sites rate-limit or block commercial VPN ranges as a
-  whole, and the IPs are shared with other VPN users. Rotating across 99 VPN exits
-  doesn't guarantee being treated as 99 separate clients.
-- **IP is only one signal.** Cookies, TLS and browser fingerprints, and request
-  patterns can still link your traffic.
-- **Follow the rules you agreed to.** Respect the terms of the sites you access and of
-  your VPN provider, honour `robots.txt` and rate limits where they apply, and prefer
-  an official API when one exists.
+```sh
+# a session's next connection gets a different exit IP
+curl -X POST -H "Authorization: Bearer $TOKEN" -d '{"username":"alice","session":"job42"}' https://lanepool.example.com/api/v1/rotate
+# this exit IP is blocked by example.com: avoid it there for an hour
+curl -X POST -H "Authorization: Bearer $TOKEN" -d '{"domain":"example.com","exitIp":"185.1.2.3","ttlMinutes":60}' https://lanepool.example.com/api/v1/burn
+```
+
+The full API is documented in [`docs/api.md`](docs/api.md).
+
+## Things to know
+
+- **VPN exits are shared and well known.** Sites that block VPN ranges may block
+  all of them, and IP rotation doesn't hide cookies or browser fingerprints.
+- **Pacing matters.** Providers limit how fast an account or IP may open new
+  WireGuard sessions. Opening many at once can get your server's IP refused for
+  hours. Keep the defaults (one new lane every 10 s, at most 2 connecting) and
+  avoid restarting all lanes repeatedly.
+- **WireGuard has no disconnect.** After a restart, old sessions still count on
+  the provider's side for a while.
+- **Use it responsibly:** respect the terms of the sites you access and of your
+  VPN provider.
 
 ## Development
 
+Requires Go 1.27+, Node 24+ and Postgres 17.
+
 ```sh
-python3 -m unittest discover -s tests -v
+createdb lanepool_test
+go test -race -p 1 ./...                 # uses TEST_DATABASE_URL or localhost/lanepool_test
+cd web && npm install && npm run dev     # dashboard on :5173, proxied to :8000
+go run ./cmd/lanepool all                # control + engine
+go run ./cmd/fakeprovider                # a local fake VPN server to add as a WireGuard config
 ```
 
-The tests use fake `wireproxy` and `glider` binaries (`tests/fakes/`), so they run
-without Docker or a VPN account. CI runs them and builds a multi-arch image
-(`linux/amd64`, `linux/arm64`), which is published to
-`ghcr.io/manan-santoki/lanepool`.
+The engine tests run real WireGuard handshakes against in-process fake providers
+(`internal/wg/wgtest`), so no VPN account is needed.
 
 ## License
 
-MIT. wireproxy (ISC) and glider (GPL-3.0) are separate programs bundled unmodified in
-the container image, under their own licenses.
+MIT

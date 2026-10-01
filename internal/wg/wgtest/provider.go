@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
-	"sync"
 	"testing"
 
 	"golang.org/x/crypto/curve25519"
@@ -50,7 +49,6 @@ type Provider struct {
 	PublicKey string // server public key
 	Endpoint  string // 127.0.0.1:port
 
-	mu        sync.Mutex
 	tun       *wg.Tunnel
 	clientKey string
 }
@@ -59,8 +57,24 @@ type Provider struct {
 // closed when the test ends.
 func Start(t testing.TB, exitIP, clientPub string) *Provider {
 	t.Helper()
+	p, err := Run(exitIP, clientPub, 0)
+	if err != nil {
+		t.Fatalf("start provider: %v", err)
+	}
+	t.Cleanup(p.Close)
+	return p
+}
+
+// Run starts a provider outside tests (see cmd/fakeprovider). port 0 picks a
+// free UDP port.
+func Run(exitIP, clientPub string, port int) (*Provider, error) {
 	priv, pub := KeyPair()
-	port := freeUDPPort(t)
+	if port == 0 {
+		var err error
+		if port, err = freeUDPPort(); err != nil {
+			return nil, err
+		}
+	}
 	tun, err := wg.Start(context.Background(), wg.Config{
 		PrivateKey: priv,
 		Addresses:  []netip.Addr{ServerAddr, WebAddr, DNSAddr},
@@ -70,14 +84,13 @@ func Start(t testing.TB, exitIP, clientPub string) *Provider {
 		ListenPort: port,
 	}, nil)
 	if err != nil {
-		t.Fatalf("start provider: %v", err)
+		return nil, err
 	}
 	p := &Provider{ExitIP: exitIP, PublicKey: pub, Endpoint: fmt.Sprintf("127.0.0.1:%d", port), tun: tun, clientKey: clientPub}
-	t.Cleanup(tun.Close)
-
 	web, err := tun.Listen(80)
 	if err != nil {
-		t.Fatalf("provider http listen: %v", err)
+		tun.Close()
+		return nil, err
 	}
 	go http.Serve(web, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/bytes" {
@@ -88,7 +101,8 @@ func Start(t testing.TB, exitIP, clientPub string) *Provider {
 	}))
 	echo, err := tun.Listen(7)
 	if err != nil {
-		t.Fatalf("provider echo listen: %v", err)
+		tun.Close()
+		return nil, err
 	}
 	go func() {
 		for {
@@ -101,11 +115,15 @@ func Start(t testing.TB, exitIP, clientPub string) *Provider {
 	}()
 	dns, err := tun.ListenUDP(netip.AddrPortFrom(DNSAddr, 53))
 	if err != nil {
-		t.Fatalf("provider dns listen: %v", err)
+		tun.Close()
+		return nil, err
 	}
 	go serveDNS(dns)
-	return p
+	return p, nil
 }
+
+// Close stops the provider.
+func (p *Provider) Close() { p.tun.Close() }
 
 // ClientConfig returns the tunnel config a lane would use to connect with priv.
 func (p *Provider) ClientConfig(priv string) wg.Config {
@@ -118,13 +136,13 @@ func (p *Provider) ClientConfig(priv string) wg.Config {
 	}
 }
 
-func freeUDPPort(t testing.TB) int {
+func freeUDPPort() (int, error) {
 	c, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
-		t.Fatalf("free port: %v", err)
+		return 0, err
 	}
 	defer c.Close()
-	return c.LocalAddr().(*net.UDPAddr).Port
+	return c.LocalAddr().(*net.UDPAddr).Port, nil
 }
 
 func serveDNS(pc net.PacketConn) {

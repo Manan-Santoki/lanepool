@@ -1,0 +1,67 @@
+# lanepool on Dokploy.
+#
+# - control joins dokploy-network so a Dokploy domain (port 8000) can route the
+#   dashboard; engine joins it as "lanepool" so other apps use lanepool:8080 and
+#   Traefik can expose it as an HTTPS proxy (see traefik-public-proxy.yml).
+# - Postgres stays on the project's private network.
+# - Set the variables from .env.example in Dokploy's Environment tab.
+x-lanepool: &lanepool
+  build:
+    context: ..
+  restart: unless-stopped
+  env_file: .env
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: lanepool
+      POSTGRES_DB: lanepool
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lanepool"]
+      interval: 5s
+      retries: 20
+    networks: [default]
+
+  control:
+    <<: *lanepool
+    command: control
+    environment:
+      DATABASE_URL: postgres://lanepool:${POSTGRES_PASSWORD}@db:5432/lanepool?sslmode=disable
+      ENGINE_URL: http://engine:9090
+      COOKIE_SECURE: "true"
+    depends_on:
+      db: { condition: service_healthy }
+    networks:
+      default:
+      dokploy-network:
+        aliases: [lanepool-control]
+
+  engine:
+    <<: *lanepool
+    command: engine
+    environment:
+      CONTROL_URL: http://control:8000
+    ulimits:
+      nofile: { soft: 65536, hard: 65536 }
+    networks:
+      default:
+      dokploy-network:
+        aliases: [lanepool]
+
+volumes:
+  db:
+
+networks:
+  dokploy-network:
+    external: true
