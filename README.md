@@ -134,6 +134,19 @@ Round robin rotates per **connection**. HTTP clients that reuse connections, suc
 `requests.Session`, keep the same lane until the connection closes. To rotate per
 request, use a fresh connection each time or pin a lane port explicitly.
 
+## Deploying on Dokploy
+
+Use `docker-compose.dokploy.yml`. It builds from this repo, joins Dokploy's shared
+`dokploy-network` and publishes nothing publicly.
+
+1. Create a Compose service from this GitHub repo with compose path
+   `./docker-compose.dokploy.yml`.
+2. In *Environment*, set at least `SURFSHARK_PRIVATE_KEY`, `PROXY_USER` and `PROXY_PASS`.
+3. Deploy. Other Dokploy apps then use `http://USER:PASS@lanepool:8080`.
+
+To see the dashboard, open an SSH tunnel with `ssh -L 8000:127.0.0.1:8000 your-server`
+and browse to <http://127.0.0.1:8000>.
+
 ## Exposing it to other machines
 
 By default every port binds to `127.0.0.1` on the host. To let another server use the
