@@ -30,6 +30,7 @@ class LaneSpec:
     location: str = ""
     endpoint: str = ""
     key_slot: int | None = None  # which SURFSHARK_PRIVATE_KEYS entry (0-based)
+    server: dict | None = None  # Surfshark server record, to rebuild the config with another key
 
 
 def valid_wireguard_key(key: str) -> bool:
@@ -131,9 +132,20 @@ def surfshark_lanes(settings: Settings, limit: int) -> list[LaneSpec]:
                 location=server.get("location", ""),
                 endpoint=f"{server['connectionName']}:51820",
                 key_slot=slot,
+                server=server,
             )
         )
     return lanes
+
+
+def rotate_key(spec: LaneSpec, settings: Settings) -> bool:
+    """Switch a Surfshark lane to the next configured key. Returns False if there is no other key."""
+    keys = settings.surfshark_private_keys
+    if spec.source != "surfshark" or spec.server is None or spec.key_slot is None or len(keys) < 2:
+        return False
+    spec.key_slot = (spec.key_slot + 1) % len(keys)
+    spec.wg_config = surfshark_wg_config(spec.server, settings, keys[spec.key_slot])
+    return True
 
 
 # --- WireGuard files ---------------------------------------------------------

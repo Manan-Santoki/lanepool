@@ -17,7 +17,7 @@ from pathlib import Path
 
 from .config import Settings
 from .socks import http_get_via_socks
-from .sources import LaneSpec
+from .sources import LaneSpec, rotate_key
 
 log = logging.getLogger("lanepool")
 
@@ -32,7 +32,7 @@ class Lane:
     port: int
     spec: LaneSpec
     proc: subprocess.Popen | None = None
-    status: str = "starting"
+    status: str = "queued"
     restarts: int = 0
     started_at: float = 0.0
     exit_ip: str = ""
@@ -124,6 +124,10 @@ class Supervisor:
         self.glider_next_start = 0.0
         self.check_host = "127.0.0.1" if settings.lane_bind in ("", "0.0.0.0", "::") else settings.lane_bind
         self.checks = ThreadPoolExecutor(max_workers=16, thread_name_prefix="ipcheck")
+        # Pacing of new connections (see _launch_due_lanes).
+        self.next_launch = 0.0
+        self.paused_until = 0.0
+        self.consecutive_failures = 0
 
     # --- setup -------------------------------------------------------------
 
@@ -133,13 +137,16 @@ class Supervisor:
         shutil.rmtree(run / "lanes", ignore_errors=True)
         (run / "lanes").mkdir(parents=True, mode=0o700)
         for lane in self.lanes:
-            wg_path = run / "lanes" / f"{lane.index:03d}-{lane.name}.wg.conf"
-            _write_private(wg_path, lane.spec.wg_config)
-            _write_private(
-                wg_path.with_name(f"{lane.index:03d}-{lane.name}.wireproxy.conf"),
-                wireproxy_config(wg_path, self.settings.lane_bind, lane.port, self.settings),
-            )
+            self._write_lane_files(lane)
         _write_private(run / "glider.conf", glider_config(self.lanes, self.settings))
+
+    def _write_lane_files(self, lane: Lane) -> None:
+        wg_path = self.settings.run_dir / "lanes" / f"{lane.index:03d}-{lane.name}.wg.conf"
+        _write_private(wg_path, lane.spec.wg_config)
+        _write_private(
+            self._wireproxy_conf(lane),
+            wireproxy_config(wg_path, self.settings.lane_bind, lane.port, self.settings),
+        )
 
     def _wireproxy_conf(self, lane: Lane) -> Path:
         return self.settings.run_dir / "lanes" / f"{lane.index:03d}-{lane.name}.wireproxy.conf"
@@ -204,6 +211,7 @@ class Supervisor:
             lane.backoff = 1.0
             lane.retry_backoff = 0.0
             lane.next_start = 0.0
+            self.paused_until = 0.0
             if lane.proc and lane.proc.poll() is None:
                 lane.proc.terminate()
             else:
@@ -232,8 +240,7 @@ class Supervisor:
                     log.warning("lane %s: %s", lane.name, lane.last_error)
                 elif lane.proc is not None and self._failed_to_connect(lane, now):
                     self._park(lane, now)
-                if lane.proc is None and now >= lane.next_start:
-                    self._start_lane(lane)
+            self._launch_due_lanes(now)
 
             if self.glider is not None and self.glider.poll() is not None:
                 log.error("glider exited with %s, restarting", self.glider.returncode)
@@ -242,6 +249,46 @@ class Supervisor:
                 self.glider_backoff = min(self.glider_backoff * 2, MAX_BACKOFF)
             if self.glider is None and now >= self.glider_next_start:
                 self._start_glider()
+
+    def _launch_due_lanes(self, now: float) -> None:
+        """Start lanes that are due, slowly.
+
+        New WireGuard sessions are opened one at a time: at most MAX_CONNECTING lanes
+        may be connecting at once, starts are LANE_START_DELAY apart, and nothing new
+        starts while the circuit breaker is open (see _record_failure). Lanes that
+        are already connected are never touched.
+        """
+        if now < self.paused_until or now < self.next_launch:
+            return
+        connecting = sum(1 for l in self.lanes if l.proc is not None and l.status == "starting")
+        due = sorted(
+            (l for l in self.lanes if l.proc is None and now >= l.next_start),
+            key=lambda l: (l.next_start, l.index),
+        )
+        for lane in due[: max(0, self.settings.max_connecting - connecting)]:
+            self._start_lane(lane)
+            self.next_launch = now + self.settings.lane_start_delay
+            if self.settings.lane_start_delay > 0:
+                break  # one start per delay period
+
+    def _record_failure(self, now: float) -> None:
+        """Pause all new connections after BREAKER_FAILURES lanes fail in a row.
+
+        A run of failures usually means the provider has stopped accepting new
+        sessions (for example an account connection limit), and more attempts only
+        make that worse. Working lanes keep running during the pause.
+        """
+        self.consecutive_failures += 1
+        if self.consecutive_failures >= self.settings.breaker_failures and self.settings.breaker_pause:
+            self.paused_until = now + self.settings.breaker_pause
+            self.consecutive_failures = 0
+            log.warning(
+                "%d lanes failed to connect in a row; pausing new connections for %d min",
+                self.settings.breaker_failures, self.settings.breaker_pause // 60,
+            )
+
+    def pause_remaining(self) -> int:
+        return max(0, int(self.paused_until - time.monotonic()))
 
     def _failed_to_connect(self, lane: Lane, now: float) -> bool:
         """True when a lane has gone CONNECT_TIMEOUT without a successful IP check.
@@ -267,13 +314,18 @@ class Supervisor:
         lane.parked = True
         lane.status = "backoff"
         lane.next_start = now + lane.retry_backoff
-        lane.last_error = (
-            f"not connected after {s.connect_timeout}s; retrying in {int(lane.retry_backoff // 60) or 1} min"
-            + (f" (last error: {lane.last_error})" if lane.last_error and "retrying in" not in lane.last_error else "")
-        )
-        log.warning("lane %s: %s", lane.name, lane.last_error)
         assert lane.proc is not None
         lane.proc.terminate()
+        # Retry with a different key: the next one in SURFSHARK_PRIVATE_KEYS.
+        rotated = rotate_key(lane.spec, s)
+        if rotated:
+            self._write_lane_files(lane)
+        lane.last_error = (
+            f"not connected after {s.connect_timeout}s; retrying in {int(lane.retry_backoff // 60) or 1} min"
+            + (f" with key {lane.spec.key_slot + 1}" if rotated else "")
+        )
+        log.warning("lane %s: %s", lane.name, lane.last_error)
+        self._record_failure(now)
 
     # --- exit IP checks ----------------------------------------------------
 
@@ -294,6 +346,8 @@ class Supervisor:
                 lane.failed_checks = 0
                 lane.retry_backoff = 0.0
                 if lane.proc is not None and not lane.parked:
+                    if lane.status != "up":
+                        self.consecutive_failures = 0
                     lane.status = "up"
         except Exception as exc:  # noqa: BLE001 - any failure marks the lane down
             with self.lock:
@@ -337,14 +391,11 @@ class Supervisor:
 
     def run(self) -> None:
         self.prepare()
+        s = self.settings
         log.info(
-            "starting %d lane(s) on ports %d-%d, one every %.1fs",
-            len(self.lanes), self.lanes[0].port, self.lanes[-1].port, self.settings.lane_start_delay,
+            "starting %d lane(s) on ports %d-%d: one every %.0fs, at most %d connecting at once",
+            len(self.lanes), self.lanes[0].port, self.lanes[-1].port, s.lane_start_delay, s.max_connecting,
         )
-        # Stagger the first connections rather than handshaking with every server at once.
-        start = time.monotonic()
-        for lane in self.lanes:
-            lane.next_start = start + lane.index * self.settings.lane_start_delay
         while not self.stopping.is_set():
             self._tick()
             self._schedule_checks()

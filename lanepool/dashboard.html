@@ -58,7 +58,7 @@
     <input id="filter" placeholder="Filter by name, country, IP or port" aria-label="Filter lanes">
     <select id="status" aria-label="Status filter">
       <option value="">All statuses</option>
-      <option>up</option><option>running</option><option>starting</option>
+      <option>up</option><option>running</option><option>starting</option><option>queued</option>
       <option>down</option><option>backoff</option><option>restarting</option>
     </select>
   </div>
@@ -82,10 +82,11 @@ function render() {
   const by = data.lanes_by_status;
   const up = (by.up || 0) + (by.running || 0);
   $("sub").textContent = `rotating proxy :${data.proxy_port} · strategy ${data.strategy} · ` +
-    (data.healthy ? "healthy" : "unhealthy") + ` · up ${Math.floor(data.uptime_s / 60)} min`;
+    (data.healthy ? "healthy" : "unhealthy") + ` · up ${Math.floor(data.uptime_s / 60)} min` +
+    (data.new_connections_paused_s ? ` · new connections paused ${Math.ceil(data.new_connections_paused_s / 60)} min (too many failures in a row)` : "");
   $("tiles").innerHTML = [
     ["Lanes", data.lanes_total], ["Healthy", up], ["Unique exit IPs", data.unique_exit_ips],
-    ["Down", (by.down || 0) + (by.restarting || 0)], ["Backing off", by.backoff || 0], ["Starting", by.starting || 0],
+    ["Down", (by.down || 0) + (by.restarting || 0)], ["Backing off", by.backoff || 0], ["Starting", by.starting || 0], ["Queued", by.queued || 0],
   ].map(([k, v]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
 
   const q = $("filter").value.trim().toLowerCase();

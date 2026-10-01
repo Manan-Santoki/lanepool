@@ -75,6 +75,7 @@ def make_server(sup: Supervisor) -> ThreadingHTTPServer:
                 "lanes_total": len(lanes),
                 "lanes_by_status": counts,
                 "unique_exit_ips": len({l["exit_ip"] for l in lanes if l["exit_ip"]}),
+                "new_connections_paused_s": sup.pause_remaining(),
                 "lanes": lanes,
             }
 

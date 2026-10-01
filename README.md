@@ -178,6 +178,28 @@ ports so only your application servers can reach them. Otherwise anyone who find
 ports can use your VPN account. Don't put the dashboard on the public internet
 without auth.
 
+## Connection pacing
+
+Providers limit how quickly an account can open new WireGuard sessions. WireGuard
+also has no "disconnect" message, so after a restart the old sessions stay counted
+on the provider's side until they time out. Opening 99 sessions at once, or
+restarting repeatedly, can therefore lock an account out of new connections for
+hours.
+
+lanepool opens connections gently:
+
+- **One at a time.** At most `MAX_CONNECTING` (2) lanes are connecting at once,
+  and starts are `LANE_START_DELAY` (10 s) apart, so 99 lanes take about 17 minutes
+  to come up.
+- **Failed lanes retry later with another key.** A lane that isn't connected after
+  `CONNECT_TIMEOUT` (45 s) is switched off. It's retried after `RETRY_BACKOFF`
+  (5 min, doubling up to 1 h) using the next key in `SURFSHARK_PRIVATE_KEYS`.
+- **Circuit breaker.** After `BREAKER_FAILURES` (5) lanes fail in a row, nothing
+  new is opened for `BREAKER_PAUSE` (15 min). Lanes that already work keep running.
+  The dashboard shows when new connections are paused.
+
+Avoid unnecessary redeploys: each one reconnects every lane.
+
 ## Resources
 
 Each lane is a separate wireproxy process using roughly 15–40 MB of RAM, so 99 lanes

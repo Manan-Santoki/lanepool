@@ -167,7 +167,8 @@ class EndToEndTest(unittest.TestCase):
         settings = Settings(
             lanes=n_lanes, run_dir=Path(tmp.name), lane_bind="127.0.0.1",
             lane_port_start=start, proxy_port=start + n_lanes, api_port=start + n_lanes + 1,
-            proxy_user=user, proxy_pass=password, ip_check_interval=60, lane_start_delay=0.1, **extra,
+            proxy_user=user, proxy_pass=password, ip_check_interval=60,
+            **{"lane_start_delay": 0.1, **extra},
         )
         def name(i):
             return f"lane{i}" + ("-FAIL" if i in fail else "") + ("-DEAD" if i in dead else "")
@@ -229,6 +230,43 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual(dead.restarts, 0)  # parking is not counted as a crash
         time.sleep(2)
         self.assertEqual(dead.status, "backoff")  # stays off until the backoff expires
+
+    def test_starts_are_gated_one_at_a_time(self):
+        sup, _ = self.run_supervisor(3, dead={0, 1, 2}, max_connecting=1, lane_start_delay=0,
+                                     connect_timeout=3, retry_backoff=600, breaker_pause=0)
+        seen_connecting = 0
+        # Sequential: each dead lane takes ~21s (two failed checks) before the next may start.
+        deadline = time.time() + 120
+        while time.time() < deadline and not all(l.status == "backoff" for l in sup.lanes):
+            with sup.lock:
+                seen_connecting = max(seen_connecting, sum(1 for l in sup.lanes if l.status == "starting"))
+            time.sleep(0.2)
+        self.assertTrue(all(l.status == "backoff" for l in sup.lanes))
+        self.assertEqual(seen_connecting, 1)
+
+    def test_failed_lane_retries_with_next_key(self):
+        key2 = "aAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk="
+        sup, s = self.run_supervisor(1, dead={0}, connect_timeout=3, retry_backoff=600,
+                                     surfshark_private_keys=[KEY, key2])
+        lane = sup.lanes[0]
+        lane.spec.source, lane.spec.server, lane.spec.key_slot = "surfshark", server("us", "nyc"), 0
+        self.wait_for(lambda: lane.status == "backoff", timeout=40)
+        self.assertEqual(lane.spec.key_slot, 1)
+        self.assertIn("with key 2", lane.last_error)
+        wg = (s.run_dir / "lanes" / f"000-{lane.name}.wg.conf").read_text()
+        self.assertIn(f"PrivateKey = {key2}", wg)
+
+    def test_breaker_pauses_new_connections_but_keeps_working_lanes(self):
+        sup, _ = self.run_supervisor(4, dead={1, 2, 3}, max_connecting=4, lane_start_delay=0,
+                                     connect_timeout=3, retry_backoff=600,
+                                     breaker_failures=2, breaker_pause=600)
+        self.wait_for(lambda: sup.pause_remaining() > 0, timeout=40)
+        self.assertEqual(sup.lanes[0].status, "up")
+        # The third dead lane may already have been connecting; nothing new starts during the pause.
+        with sup.lock:
+            queued = [l for l in sup.lanes if l.status == "queued"]
+        time.sleep(3)
+        self.assertTrue(all(l.status == "queued" for l in queued))
 
     def test_restart_via_api(self):
         sup, s = self.run_supervisor(1)

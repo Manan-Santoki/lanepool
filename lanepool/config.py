@@ -85,8 +85,11 @@ class Settings:
     lane_port_start: int = 10001
     lane_bind: str = "0.0.0.0"
     lane_logs: bool = False
-    lane_start_delay: float = 1.0
-    connect_timeout: int = 90
+    lane_start_delay: float = 10.0
+    max_connecting: int = 2
+    connect_timeout: int = 45
+    breaker_failures: int = 5
+    breaker_pause: int = 900
     retry_backoff: int = 300
     retry_backoff_max: int = 3600
 
@@ -139,8 +142,11 @@ class Settings:
             lane_port_start=_int("LANE_PORT_START", 10001, minimum=1024, maximum=65000),
             lane_bind=_str("LANE_BIND", cls.lane_bind),
             lane_logs=_bool("LANE_LOGS", False),
-            lane_start_delay=_float("LANE_START_DELAY", 1.0),
-            connect_timeout=_int("CONNECT_TIMEOUT", 90, minimum=15),
+            lane_start_delay=_float("LANE_START_DELAY", 10.0),
+            max_connecting=_int("MAX_CONNECTING", 2, minimum=1),
+            connect_timeout=_int("CONNECT_TIMEOUT", 45, minimum=15),
+            breaker_failures=_int("BREAKER_FAILURES", 5, minimum=1),
+            breaker_pause=_int("BREAKER_PAUSE", 900, minimum=0),
             retry_backoff=_int("RETRY_BACKOFF", 300, minimum=5),
             retry_backoff_max=_int("RETRY_BACKOFF_MAX", 3600, minimum=5),
             proxy_port=_int("PROXY_PORT", 8080, minimum=1, maximum=65535),
