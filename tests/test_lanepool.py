@@ -160,16 +160,18 @@ class GliderConfigTest(unittest.TestCase):
 class EndToEndTest(unittest.TestCase):
     """Runs the supervisor with fake wireproxy/glider binaries."""
 
-    def run_supervisor(self, n_lanes, user="", password="", fail=()):
+    def run_supervisor(self, n_lanes, user="", password="", fail=(), dead=(), **extra):
         start = free_port_block(n_lanes + 2)
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         settings = Settings(
             lanes=n_lanes, run_dir=Path(tmp.name), lane_bind="127.0.0.1",
             lane_port_start=start, proxy_port=start + n_lanes, api_port=start + n_lanes + 1,
-            proxy_user=user, proxy_pass=password, ip_check_interval=60,
+            proxy_user=user, proxy_pass=password, ip_check_interval=60, lane_start_delay=0.1, **extra,
         )
-        specs = [LaneSpec(f"lane{i}{'-FAIL' if i in fail else ''}", "file", "x") for i in range(n_lanes)]
+        def name(i):
+            return f"lane{i}" + ("-FAIL" if i in fail else "") + ("-DEAD" if i in dead else "")
+        specs = [LaneSpec(name(i), "file", "x") for i in range(n_lanes)]
         sup = supervisor.Supervisor(settings, specs)
         api = make_server(sup)
         import threading
@@ -216,6 +218,17 @@ class EndToEndTest(unittest.TestCase):
         self.wait_for(lambda: sup.lanes[0].status == "up" and sup.lanes[1].restarts >= 2)
         self.assertIn("simulated failure", sup.lanes[1].last_error)
         self.assertIn(sup.lanes[1].status, {"restarting", "starting"})
+
+    def test_lane_that_never_connects_is_parked(self):
+        sup, _ = self.run_supervisor(2, dead={1}, connect_timeout=3, retry_backoff=600)
+        # Two failed checks are needed: at +5s and then 15s later.
+        self.wait_for(lambda: sup.lanes[0].status == "up" and sup.lanes[1].status == "backoff", timeout=40)
+        dead = sup.lanes[1]
+        self.wait_for(lambda: dead.proc is None)
+        self.assertIn("retrying in 10 min", dead.last_error)
+        self.assertEqual(dead.restarts, 0)  # parking is not counted as a crash
+        time.sleep(2)
+        self.assertEqual(dead.status, "backoff")  # stays off until the backoff expires
 
     def test_restart_via_api(self):
         sup, s = self.run_supervisor(1)

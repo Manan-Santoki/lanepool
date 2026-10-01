@@ -40,6 +40,7 @@
   .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--wait); }
   .s-up .dot, .s-running .dot { background: var(--up); }
   .s-down .dot, .s-restarting .dot { background: var(--down); }
+  .s-backoff .dot { background: var(--muted); }
   .err { color: var(--muted); max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
   button { background: none; border: 1px solid var(--line); color: var(--accent); border-radius: 6px;
            padding: 3px 8px; font: inherit; font-size: 12px; cursor: pointer; }
@@ -58,7 +59,7 @@
     <select id="status" aria-label="Status filter">
       <option value="">All statuses</option>
       <option>up</option><option>running</option><option>starting</option>
-      <option>down</option><option>restarting</option>
+      <option>down</option><option>backoff</option><option>restarting</option>
     </select>
   </div>
   <div class="table">
@@ -84,7 +85,7 @@ function render() {
     (data.healthy ? "healthy" : "unhealthy") + ` · up ${Math.floor(data.uptime_s / 60)} min`;
   $("tiles").innerHTML = [
     ["Lanes", data.lanes_total], ["Healthy", up], ["Unique exit IPs", data.unique_exit_ips],
-    ["Down", (by.down || 0) + (by.restarting || 0)], ["Starting", by.starting || 0],
+    ["Down", (by.down || 0) + (by.restarting || 0)], ["Backing off", by.backoff || 0], ["Starting", by.starting || 0],
   ].map(([k, v]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
 
   const q = $("filter").value.trim().toLowerCase();

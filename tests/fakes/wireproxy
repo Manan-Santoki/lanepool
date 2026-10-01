@@ -10,9 +10,13 @@ if "FAIL" in kv["WGConfig"]:
     print("simulated failure", flush=True)
     sys.exit(3)
 
+DEAD = "DEAD" in kv["WGConfig"]  # simulate a tunnel whose handshake never completes
+
 class H(socketserver.BaseRequestHandler):
     def handle(self):
         s = self.request
+        if DEAD:
+            return
         n = s.recv(2)[1]; methods = s.recv(n)
         if user:
             s.sendall(b"\x05\x02"); s.recv(1)

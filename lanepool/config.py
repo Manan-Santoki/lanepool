@@ -28,6 +28,19 @@ def _int(name: str, default: int, minimum: int = 0, maximum: int | None = None) 
     return value
 
 
+def _float(name: str, default: float, minimum: float = 0.0) -> float:
+    raw = _str(name)
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ConfigError(f"{name} must be a number, got {raw!r}") from exc
+    if value < minimum:
+        raise ConfigError(f"{name} must be at least {minimum}, got {value}")
+    return value
+
+
 def _bool(name: str, default: bool) -> bool:
     raw = _str(name).lower()
     if not raw:
@@ -72,6 +85,10 @@ class Settings:
     lane_port_start: int = 10001
     lane_bind: str = "0.0.0.0"
     lane_logs: bool = False
+    lane_start_delay: float = 1.0
+    connect_timeout: int = 90
+    retry_backoff: int = 300
+    retry_backoff_max: int = 3600
 
     # Rotating front proxy
     proxy_port: int = 8080
@@ -122,6 +139,10 @@ class Settings:
             lane_port_start=_int("LANE_PORT_START", 10001, minimum=1024, maximum=65000),
             lane_bind=_str("LANE_BIND", cls.lane_bind),
             lane_logs=_bool("LANE_LOGS", False),
+            lane_start_delay=_float("LANE_START_DELAY", 1.0),
+            connect_timeout=_int("CONNECT_TIMEOUT", 90, minimum=15),
+            retry_backoff=_int("RETRY_BACKOFF", 300, minimum=5),
+            retry_backoff_max=_int("RETRY_BACKOFF_MAX", 3600, minimum=5),
             proxy_port=_int("PROXY_PORT", 8080, minimum=1, maximum=65535),
             proxy_user=user,
             proxy_pass=password,

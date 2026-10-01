@@ -43,6 +43,10 @@ class Lane:
     next_start: float = 0.0
     backoff: float = 1.0
     checking: bool = False
+    last_ok: float = 0.0
+    failed_checks: int = 0  # consecutive failed IP checks since the last start or success
+    parked: bool = False  # stopped on purpose after failing to connect; waiting to retry
+    retry_backoff: float = 0.0
     output: deque = field(default_factory=lambda: deque(maxlen=30))
 
     @property
@@ -167,6 +171,8 @@ class Supervisor:
             lane.backoff = min(lane.backoff * 2, MAX_BACKOFF)
             return
         lane.proc = proc
+        lane.parked = False
+        lane.failed_checks = 0
         lane.started_at = time.monotonic()
         lane.status = "starting" if self.settings.ip_check_interval else "running"
         lane.next_check = time.monotonic() + 5
@@ -196,6 +202,7 @@ class Supervisor:
     def restart_lane(self, lane: Lane) -> None:
         with self.lock:
             lane.backoff = 1.0
+            lane.retry_backoff = 0.0
             lane.next_start = 0.0
             if lane.proc and lane.proc.poll() is None:
                 lane.proc.terminate()
@@ -208,7 +215,9 @@ class Supervisor:
             if self.stopping.is_set():
                 return
             for lane in self.lanes:
-                if lane.proc is not None and lane.proc.poll() is not None:
+                if lane.proc is not None and lane.proc.poll() is not None and lane.parked:
+                    lane.proc = None  # we stopped it; next_start is already set
+                elif lane.proc is not None and lane.proc.poll() is not None:
                     code = lane.proc.returncode
                     tail = lane.output[-1] if lane.output else ""
                     lane.proc = None
@@ -221,6 +230,8 @@ class Supervisor:
                     lane.next_start = now + lane.backoff
                     lane.backoff = min(lane.backoff * 2, MAX_BACKOFF)
                     log.warning("lane %s: %s", lane.name, lane.last_error)
+                elif lane.proc is not None and self._failed_to_connect(lane, now):
+                    self._park(lane, now)
                 if lane.proc is None and now >= lane.next_start:
                     self._start_lane(lane)
 
@@ -231,6 +242,38 @@ class Supervisor:
                 self.glider_backoff = min(self.glider_backoff * 2, MAX_BACKOFF)
             if self.glider is None and now >= self.glider_next_start:
                 self._start_glider()
+
+    def _failed_to_connect(self, lane: Lane, now: float) -> bool:
+        """True when a lane has gone CONNECT_TIMEOUT without a successful IP check.
+
+        At least two checks must have failed, so a lane is never stopped just because
+        its first check hasn't run yet.
+        """
+        if not self.settings.ip_check_interval or lane.status == "up" or lane.parked:
+            return False
+        if lane.failed_checks < 2:
+            return False
+        return now - max(lane.started_at, lane.last_ok) > self.settings.connect_timeout
+
+    def _park(self, lane: Lane, now: float) -> None:
+        """Stop a lane that can't connect and retry later with a growing delay.
+
+        wireproxy retries a failed handshake every 5 seconds forever. With many dead
+        lanes that adds up to a steady stream of handshakes, which VPN providers
+        throttle, so dead lanes are switched off instead.
+        """
+        s = self.settings
+        lane.retry_backoff = min(lane.retry_backoff * 2 or s.retry_backoff, s.retry_backoff_max)
+        lane.parked = True
+        lane.status = "backoff"
+        lane.next_start = now + lane.retry_backoff
+        lane.last_error = (
+            f"not connected after {s.connect_timeout}s; retrying in {int(lane.retry_backoff // 60) or 1} min"
+            + (f" (last error: {lane.last_error})" if lane.last_error and "retrying in" not in lane.last_error else "")
+        )
+        log.warning("lane %s: %s", lane.name, lane.last_error)
+        assert lane.proc is not None
+        lane.proc.terminate()
 
     # --- exit IP checks ----------------------------------------------------
 
@@ -247,18 +290,22 @@ class Supervisor:
                 if ip != lane.exit_ip:
                     log.info("lane %s (port %d) exit IP %s", lane.name, lane.port, ip)
                 lane.exit_ip, lane.latency_ms, lane.last_error = ip, int(elapsed * 1000), ""
-                if lane.proc is not None:
+                lane.last_ok = time.monotonic()
+                lane.failed_checks = 0
+                lane.retry_backoff = 0.0
+                if lane.proc is not None and not lane.parked:
                     lane.status = "up"
         except Exception as exc:  # noqa: BLE001 - any failure marks the lane down
             with self.lock:
                 lane.last_error = str(exc) or exc.__class__.__name__
-                if lane.proc is not None:
-                    lane.status = "down"
+                lane.failed_checks += 1
+                if lane.proc is not None and not lane.parked:
+                    lane.status = "starting" if lane.last_ok < lane.started_at else "down"
         finally:
             with self.lock:
                 lane.last_check = time.time()
                 # Retry failing lanes sooner than healthy ones.
-                interval = s.ip_check_interval if lane.status == "up" else min(60, s.ip_check_interval)
+                interval = s.ip_check_interval if lane.status == "up" else min(15, s.ip_check_interval)
                 lane.next_check = time.monotonic() + interval
                 lane.checking = False
 
@@ -288,7 +335,14 @@ class Supervisor:
 
     def run(self) -> None:
         self.prepare()
-        log.info("starting %d lane(s) on ports %d-%d", len(self.lanes), self.lanes[0].port, self.lanes[-1].port)
+        log.info(
+            "starting %d lane(s) on ports %d-%d, one every %.1fs",
+            len(self.lanes), self.lanes[0].port, self.lanes[-1].port, self.settings.lane_start_delay,
+        )
+        # Stagger the first connections rather than handshaking with every server at once.
+        start = time.monotonic()
+        for lane in self.lanes:
+            lane.next_start = start + lane.index * self.settings.lane_start_delay
         while not self.stopping.is_set():
             self._tick()
             self._schedule_checks()
