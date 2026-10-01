@@ -145,14 +145,14 @@ type BurnedIP struct {
 
 // Report is what an engine pushes to control every couple of seconds.
 type Report struct {
-	NodeID      string        `json:"nodeId"`
-	StartedAt   time.Time     `json:"startedAt"`
-	Lanes       []LaneState   `json:"lanes"`
-	Gateway     GatewayState  `json:"gateway"`
-	Connections []ConnRecord  `json:"connections,omitempty"`
-	Usage       []UsageDelta  `json:"usage,omitempty"`
-	Events      []Event       `json:"events,omitempty"`
-	AutoBurned  []BurnedIP    `json:"autoBurned,omitempty"`
+	NodeID      string       `json:"nodeId"`
+	StartedAt   time.Time    `json:"startedAt"`
+	Lanes       []LaneState  `json:"lanes"`
+	Gateway     GatewayState `json:"gateway"`
+	Connections []ConnRecord `json:"connections,omitempty"`
+	Usage       []UsageDelta `json:"usage,omitempty"`
+	Events      []Event      `json:"events,omitempty"`
+	AutoBurned  []BurnedIP   `json:"autoBurned,omitempty"`
 }
 
 // LaneState is the runtime state of one lane.
