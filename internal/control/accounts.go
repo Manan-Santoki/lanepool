@@ -191,8 +191,11 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) (any, error) {
 		return nil, err
 	}
 	ctx := r.Context()
-	key := clientIP(r) + "|" + strings.ToLower(in.Email)
-	if s.logins.blocked(key) || s.logins.blocked(clientIP(r)) {
+	email := strings.ToLower(strings.TrimSpace(in.Email))
+	key := clientIP(r) + "|" + email
+	// Per IP+email, per IP, and per email regardless of IP (client IPs from
+	// proxy headers can be spoofed, so the email limit is the backstop).
+	if s.logins.blocked(key) || s.logins.blocked(clientIP(r)) || s.loginsByEmail.blocked(email) {
 		return nil, errStatus(http.StatusTooManyRequests, "too many failed attempts; try again in 15 minutes")
 	}
 	var hash string
@@ -206,6 +209,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) (any, error) {
 		}
 		s.logins.fail(key)
 		s.logins.fail(clientIP(r))
+		s.loginsByEmail.fail(email)
 		return nil, errStatus(http.StatusUnauthorized, "wrong email or password")
 	}
 	s.logins.reset(key)

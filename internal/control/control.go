@@ -55,8 +55,9 @@ type Server struct {
 	serversMu    sync.Mutex
 	syncRequired chan struct{}
 
-	logins   *rateLimiter
-	alerting *alerter
+	logins        *rateLimiter
+	loginsByEmail *rateLimiter
+	alerting      *alerter
 }
 
 // New opens the database, migrates it and bootstraps first-run data.
@@ -73,10 +74,11 @@ func New(ctx context.Context, cfg Config, log *slog.Logger) (*Server, error) {
 	}
 	s := &Server{
 		cfg: cfg, db: pool, log: log, box: newSecretBox(cfg.Secret),
-		engine:       &engineClient{url: cfg.EngineURL, token: cfg.EngineToken, http: &http.Client{Timeout: 10 * time.Second}},
-		hub:          newHub(),
-		syncRequired: make(chan struct{}, 1),
-		logins:       newRateLimiter(10, 15*time.Minute),
+		engine:        &engineClient{url: cfg.EngineURL, token: cfg.EngineToken, http: &http.Client{Timeout: 10 * time.Second}},
+		hub:           newHub(),
+		syncRequired:  make(chan struct{}, 1),
+		logins:        newRateLimiter(10, 15*time.Minute),
+		loginsByEmail: newRateLimiter(30, 15*time.Minute),
 	}
 	s.alerting = &alerter{s: s, fired: map[string]time.Time{}}
 	if err := s.bootstrap(ctx); err != nil {

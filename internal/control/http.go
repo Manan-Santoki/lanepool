@@ -147,6 +147,10 @@ func idParam(r *http.Request) (int64, error) {
 }
 
 func clientIP(r *http.Request) string {
+	// Behind Cloudflare the visitor's address is in CF-Connecting-IP.
+	if ip := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); ip != "" {
+		return ip
+	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
