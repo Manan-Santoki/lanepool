@@ -64,7 +64,7 @@
   <div class="table">
     <table>
       <thead><tr>
-        <th>#</th><th>Lane</th><th>Status</th><th>Port</th><th>Exit IP</th>
+        <th>#</th><th>Lane</th><th>Status</th><th>Port</th><th>Key</th><th>Exit IP</th>
         <th>Latency</th><th>Location</th><th>Restarts</th><th>Last error</th><th></th>
       </tr></thead>
       <tbody id="rows"></tbody>
@@ -97,6 +97,7 @@ function render() {
       <td><code>${esc(l.name)}</code></td>
       <td class="s-${esc(l.status)}"><span class="dot"></span>${esc(l.status)}</td>
       <td class="num"><code>${l.port}</code></td>
+      <td class="num">${l.key ?? "—"}</td>
       <td><code>${esc(l.exit_ip || "—")}</code></td>
       <td class="num">${l.latency_ms != null ? l.latency_ms + " ms" : "—"}</td>
       <td>${esc([l.location, l.country].filter(Boolean).join(", ") || l.endpoint || "—")}</td>

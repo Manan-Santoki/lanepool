@@ -37,8 +37,9 @@ verified against pinned SHA-256 checksums (see the `Dockerfile`).
 
 1. **Get a Surfshark WireGuard key.** In the Surfshark web app: *VPN → Manual setup →
    Router (or Desktop) → WireGuard → I don't have a key pair → Generate*. Copy the
-   **private** key. One key works for every location, and Surfshark allows unlimited
-   simultaneous connections.
+   **private** key. Surfshark allows unlimited devices, but **one key can only stay
+   connected to about 20–24 servers at once**. For more lanes, generate one key pair
+   per 20 lanes and list the extras in `SURFSHARK_PRIVATE_KEYS`, for example 5 keys for 99 lanes.
 
 2. **Configure and start:**
 
@@ -74,6 +75,7 @@ for the full, commented list. The most useful ones:
 | Variable | Default | Meaning |
 |---|---|---|
 | `SURFSHARK_PRIVATE_KEY` | – | WireGuard private key from the Surfshark dashboard |
+| `SURFSHARK_PRIVATE_KEYS` | – | More keys, comma separated; lanes are spread evenly across all keys |
 | `LANES` | `99` | Number of lanes (exit IPs) |
 | `COUNTRIES` / `EXCLUDE_COUNTRIES` | – | Comma-separated country codes to include or skip |
 | `SURFSHARK_LOCATIONS` | – | Exact locations in order, e.g. `us-nyc,de-fra,uk-lon` |

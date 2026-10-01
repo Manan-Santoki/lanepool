@@ -62,6 +62,7 @@ class Lane:
             "location": self.spec.location or None,
             "endpoint": self.spec.endpoint or None,
             "source": self.spec.source,
+            "key": None if self.spec.key_slot is None else self.spec.key_slot + 1,
             "pid": self.proc.pid if self.proc and self.proc.poll() is None else None,
             "restarts": self.restarts,
             "last_check": self.last_check or None,

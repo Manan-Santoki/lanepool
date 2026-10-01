@@ -43,10 +43,20 @@ def _list(name: str) -> list[str]:
     return [item.strip().lower() for item in _str(name).split(",") if item.strip()]
 
 
+def _keys() -> list[str]:
+    """SURFSHARK_PRIVATE_KEYS (comma separated) plus SURFSHARK_PRIVATE_KEY, de-duplicated."""
+    raw = _str("SURFSHARK_PRIVATE_KEYS").split(",") + [_str("SURFSHARK_PRIVATE_KEY")]
+    keys: list[str] = []
+    for key in (k.strip() for k in raw):
+        if key and key not in keys:
+            keys.append(key)
+    return keys
+
+
 @dataclass(frozen=True)
 class Settings:
     # Surfshark (optional: leave the key empty to only use files from CONFIG_DIR)
-    surfshark_private_key: str = ""
+    surfshark_private_keys: list[str] = field(default_factory=list)
     surfshark_address: str = "10.14.0.2/32"
     surfshark_dns: str = "162.252.172.57, 149.154.159.92"
     surfshark_api: str = "https://api.surfshark.com/v4/server/clusters/generic"
@@ -98,7 +108,7 @@ class Settings:
             raise ConfigError("IP_CHECK_URL must be a plain http:// URL")
 
         settings = cls(
-            surfshark_private_key=_str("SURFSHARK_PRIVATE_KEY"),
+            surfshark_private_keys=_keys(),
             surfshark_address=_str("SURFSHARK_ADDRESS", cls.surfshark_address),
             surfshark_dns=_str("SURFSHARK_DNS", cls.surfshark_dns),
             surfshark_api=_str("SURFSHARK_API", cls.surfshark_api),

@@ -29,6 +29,7 @@ class LaneSpec:
     country_code: str = ""
     location: str = ""
     endpoint: str = ""
+    key_slot: int | None = None  # which SURFSHARK_PRIVATE_KEYS entry (0-based)
 
 
 def valid_wireguard_key(key: str) -> bool:
@@ -96,10 +97,10 @@ def select_surfshark_servers(servers: list[dict], settings: Settings, limit: int
     return chosen
 
 
-def surfshark_wg_config(server: dict, settings: Settings) -> str:
+def surfshark_wg_config(server: dict, settings: Settings, private_key: str) -> str:
     return (
         "[Interface]\n"
-        f"PrivateKey = {settings.surfshark_private_key}\n"
+        f"PrivateKey = {private_key}\n"
         f"Address = {settings.surfshark_address}\n"
         f"DNS = {settings.surfshark_dns}\n"
         "\n"
@@ -114,17 +115,22 @@ def surfshark_wg_config(server: dict, settings: Settings) -> str:
 def surfshark_lanes(settings: Settings, limit: int) -> list[LaneSpec]:
     servers = fetch_surfshark_servers(settings.surfshark_api)
     log.info("Surfshark server list: %d locations", len(servers))
+    keys = settings.surfshark_private_keys
     lanes = []
-    for server in select_surfshark_servers(servers, settings, limit):
+    # Surfshark limits how many servers one key can be connected to at once, so
+    # lanes are spread round-robin across all configured keys.
+    for i, server in enumerate(select_surfshark_servers(servers, settings, limit)):
+        slot = i % len(keys)
         lanes.append(
             LaneSpec(
                 name=_location_id(server),
                 source="surfshark",
-                wg_config=surfshark_wg_config(server, settings),
+                wg_config=surfshark_wg_config(server, settings, keys[slot]),
                 country=server.get("country", ""),
                 country_code=str(server.get("countryCode", "")).upper(),
                 location=server.get("location", ""),
                 endpoint=f"{server['connectionName']}:51820",
+                key_slot=slot,
             )
         )
     return lanes
@@ -202,10 +208,15 @@ def collect_lanes(settings: Settings) -> list[LaneSpec]:
         log.info("loaded %d lane(s) from %s", len(lanes), settings.config_dir)
 
     remaining = settings.lanes - len(lanes)
-    if settings.surfshark_private_key and remaining > 0:
-        if not valid_wireguard_key(settings.surfshark_private_key):
-            raise ValueError("SURFSHARK_PRIVATE_KEY is not a valid WireGuard private key")
-        lanes += surfshark_lanes(settings, remaining)
+    keys = settings.surfshark_private_keys
+    if keys and remaining > 0:
+        for n, key in enumerate(keys, 1):
+            if not valid_wireguard_key(key):
+                raise ValueError(f"Surfshark key #{n} is not a valid WireGuard private key")
+        surfshark = surfshark_lanes(settings, remaining)
+        log.info("%d Surfshark lane(s) across %d key(s), about %d per key",
+                 len(surfshark), len(keys), -(-len(surfshark) // len(keys)))
+        lanes += surfshark
 
     # Names are used in URLs and file names, so make them unique.
     seen: dict[str, int] = {}

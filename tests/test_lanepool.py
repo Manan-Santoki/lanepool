@@ -68,6 +68,12 @@ class SettingsTest(unittest.TestCase):
         with self.env(PROXY_PORT="10005"), self.assertRaises(ConfigError):
             Settings.from_env()
 
+    def test_keys_merge_and_dedupe(self):
+        with self.env(SURFSHARK_PRIVATE_KEYS=" a, b ,a", SURFSHARK_PRIVATE_KEY="c"):
+            self.assertEqual(Settings.from_env().surfshark_private_keys, ["a", "b", "c"])
+        with self.env(SURFSHARK_PRIVATE_KEY="a"):
+            self.assertEqual(Settings.from_env().surfshark_private_keys, ["a"])
+
     def test_lists(self):
         with self.env(COUNTRIES="US, de ,", SURFSHARK_LOCATIONS="us-nyc"):
             s = Settings.from_env()
@@ -94,7 +100,7 @@ class SourcesTest(unittest.TestCase):
         self.assertEqual([sources._location_id(x) for x in picked], ["us-nyc", "al-tia"])
 
     def test_surfshark_config(self):
-        text = sources.surfshark_wg_config(self.servers[0], Settings(surfshark_private_key=KEY))
+        text = sources.surfshark_wg_config(self.servers[0], Settings(), KEY)
         self.assertIn(f"PrivateKey = {KEY}", text)
         self.assertIn("Endpoint = us-nyc.prod.surfshark.com:51820", text)
         self.assertIn("Address = 10.14.0.2/32", text)
@@ -122,13 +128,22 @@ class SourcesTest(unittest.TestCase):
             Path(d, "us-nyc.conf").write_text(
                 "[Interface]\nPrivateKey = a\nAddress = 10.0.0.2/32\n[Peer]\nPublicKey = b\nEndpoint = x:1\n"
             )
-            s = Settings(config_dir=Path(d), surfshark_private_key=KEY, lanes=3)
+            s = Settings(config_dir=Path(d), surfshark_private_keys=[KEY], lanes=3)
             with mock.patch.object(sources, "fetch_surfshark_servers", return_value=self.servers):
                 lanes = sources.collect_lanes(s)
         self.assertEqual([l.name for l in lanes], ["us-nyc", "al-tia", "de-ber"])
 
+    def test_lanes_spread_round_robin_across_keys(self):
+        key2 = "aAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk="
+        s = Settings(config_dir=Path("/nonexistent"), surfshark_private_keys=[KEY, key2], lanes=5)
+        with mock.patch.object(sources, "fetch_surfshark_servers", return_value=self.servers):
+            lanes = sources.collect_lanes(s)
+        self.assertEqual([l.key_slot for l in lanes], [0, 1, 0, 1, 0])
+        self.assertIn(f"PrivateKey = {key2}", lanes[1].wg_config)
+        self.assertIn(f"PrivateKey = {KEY}", lanes[2].wg_config)
+
     def test_collect_rejects_bad_key(self):
-        s = Settings(config_dir=Path("/nonexistent"), surfshark_private_key="bad")
+        s = Settings(config_dir=Path("/nonexistent"), surfshark_private_keys=["bad"])
         with self.assertRaises(ValueError):
             sources.collect_lanes(s)
 
