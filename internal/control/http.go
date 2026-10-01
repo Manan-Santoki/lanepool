@@ -225,6 +225,8 @@ func (s *Server) Router() http.Handler {
 			r.Post("/auth/password", s.h(s.changeOwnPassword))
 			r.Patch("/lanes/{lane}", s.h(s.patchLane))
 			r.Post("/lanes/restart-all", s.h(s.restartAllLanes))
+			r.Post("/lanes/add", s.h(s.addLanes))
+			r.Delete("/lanes/{lane}", s.h(s.removeLane))
 			r.Post("/lanes/{lane}/restart", s.h(s.restartLane))
 			r.Post("/gateway/restart", s.h(s.restartGateway))
 			r.Post("/gateway/maintenance", s.h(s.setMaintenance))

@@ -1,0 +1,21 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+
+node_modules
+
+# Build output: keep dist/.gitkeep so Go's //go:embed all:dist works in fresh checkouts
+dist/*
+!dist/.gitkeep
+dist-ssr
+*.local
+*.tsbuildinfo
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.sw?

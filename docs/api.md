@@ -88,7 +88,13 @@ interface Page<T> { items: T[]; nextCursor?: string }
 interface BurnedIp { id: number; domain: string; laneId: string; laneName?: string; exitIp?: string; source: "manual" | "auto" | "api"; note: string; createdAt: string; expiresAt: string }
 
 interface SurfsharkKey { id: number; label: string; publicKey: string; enabled: boolean; createdAt: string; lanes: number; upLanes: number }
-interface SurfsharkSelection { lanes: number; countries: string[]; excludeCountries: string[]; locations: string[]; includeVirtual: boolean }
+interface SurfsharkSelection {
+  lanes: number;              // lanes filled from the country filters (pinned locations always run on top)
+  countries: string[]; excludeCountries: string[];
+  locations: string[];        // pinned location IDs, always lanes
+  excludeLocations: string[]; // removed locations, never picked automatically
+  includeVirtual: boolean;
+}
 interface SurfsharkProvider { keys: SurfsharkKey[]; selection: SurfsharkSelection; serverCount: number; lastFetchedAt?: string; fetchError?: string }
 interface SurfsharkLocation { id: string; country: string; countryCode: string; city: string; virtual: boolean; load: number }
 interface WireguardConfig { id: number; name: string; countryCode: string; city: string; endpoint: string; enabled: boolean; createdAt: string }
@@ -148,6 +154,8 @@ interface TopItem { key: string; label: string; bytes: number; connections: numb
 | POST | /api/lanes/:id/restart | | `202` |
 | POST | /api/lanes/restart-all | | `202` (lanes reconnect one at a time) |
 | GET | /api/lanes/random?country=us | | `Lane` (a random healthy lane) |
+| POST | /api/lanes/add | `{ locations: string[] }` (Surfshark location IDs) | `Lane[]`; pins the locations, un-removes them and raises the lane count so no existing lane is displaced |
+| DELETE | /api/lanes/:id | | `204`; Surfshark: unpins, adds to `excludeLocations`, lowers the count. WireGuard: deletes the config |
 | POST | /api/gateway/restart | | `202` (closes open proxy connections; lanes keep running) |
 | POST | /api/gateway/maintenance | `{ paused: boolean }` | `204` |
 

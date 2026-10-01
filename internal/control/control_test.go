@@ -415,6 +415,45 @@ func TestSurfsharkSelectionAndKeys(t *testing.T) {
 	if len(locs) != 3 {
 		t.Fatalf("locations %d", len(locs))
 	}
+
+	// Add a lane in another country: existing lanes stay, the count grows.
+	if code := st.call(st.client, "POST", "/api/lanes/add", map[string]any{"locations": []string{"nope"}}, nil); code != 422 {
+		t.Fatalf("unknown location: %d", code)
+	}
+	if code := st.call(st.client, "POST", "/api/lanes/add", map[string]any{"locations": []string{"us-nyc"}}, &lanes); code != 200 {
+		t.Fatalf("add lane: %d", code)
+	}
+	if ids := laneIDs(lanes); ids != "surfshark:us-nyc,surfshark:de-ber,surfshark:de-fra" {
+		t.Fatalf("after add: %s", ids)
+	}
+	// Remove an automatically picked lane: it isn't replaced or picked again.
+	if code := st.call(st.client, "DELETE", "/api/lanes/"+url.PathEscape("surfshark:de-ber"), nil, nil); code != 204 {
+		t.Fatalf("remove lane: %d", code)
+	}
+	st.call(st.client, "GET", "/api/lanes", nil, &lanes)
+	if ids := laneIDs(lanes); ids != "surfshark:us-nyc,surfshark:de-fra" {
+		t.Fatalf("after remove: %s", ids)
+	}
+	var sel SurfsharkSelection
+	raw := map[string]json.RawMessage{}
+	st.call(st.client, "GET", "/api/providers/surfshark", nil, &raw)
+	json.Unmarshal(raw["selection"], &sel)
+	if sel.Lanes != 2 || strings.Join(sel.Locations, ",") != "us-nyc" || strings.Join(sel.ExcludeLocations, ",") != "de-ber" {
+		t.Fatalf("selection %+v", sel)
+	}
+	// Adding it back un-excludes it.
+	st.call(st.client, "POST", "/api/lanes/add", map[string]any{"locations": []string{"de-ber"}}, &lanes)
+	if len(lanes) != 3 {
+		t.Fatalf("re-add: %s", laneIDs(lanes))
+	}
+}
+
+func laneIDs(lanes []Lane) string {
+	var ids []string
+	for _, l := range lanes {
+		ids = append(ids, l.ID)
+	}
+	return strings.Join(ids, ",")
 }
 
 func TestParseWGQuick(t *testing.T) {

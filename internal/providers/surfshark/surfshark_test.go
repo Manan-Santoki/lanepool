@@ -44,9 +44,21 @@ func TestSelectFilters(t *testing.T) {
 	}
 }
 
-func TestSelectPinnedLocationsKeepOrder(t *testing.T) {
-	got := ids(Select(servers, Filter{Locations: []string{"us-nyc", "nope", "AL-TIA"}}, 10))
-	if !reflect.DeepEqual(got, []string{"us-nyc", "al-tia"}) {
+func TestSelectPinnedFirstThenFill(t *testing.T) {
+	// Pinned locations come first in their order; the rest fill up to the limit.
+	got := ids(Select(servers, Filter{Locations: []string{"us-nyc", "nope", "AL-TIA"}, IncludeVirtual: true}, 4))
+	if !reflect.DeepEqual(got, []string{"us-nyc", "al-tia", "de-ber", "us-lax"}) {
+		t.Fatalf("got %v", got)
+	}
+	// Pinned locations are kept even beyond the limit.
+	if got := ids(Select(servers, Filter{Locations: []string{"us-nyc", "de-fra"}}, 1)); len(got) != 2 {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestSelectExcludedLocations(t *testing.T) {
+	got := ids(Select(servers, Filter{ExcludeLocations: []string{"al-tia", "de-ber"}, IncludeVirtual: true}, 10))
+	if !reflect.DeepEqual(got, []string{"de-fra", "us-lax", "us-nyc"}) {
 		t.Fatalf("got %v", got)
 	}
 }

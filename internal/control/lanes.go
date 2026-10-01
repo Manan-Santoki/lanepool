@@ -134,6 +134,134 @@ func (s *Server) patchLane(_ http.ResponseWriter, r *http.Request) (any, error) 
 	return nil, errNotFound
 }
 
+// addLanes adds Surfshark locations as lanes: they are pinned (always used),
+// removed from the exclusions, and the lane count grows so no existing lane is
+// displaced.
+func (s *Server) addLanes(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var in struct {
+		Locations []string `json:"locations"`
+	}
+	if err := decode(r, &in); err != nil {
+		return nil, err
+	}
+	ctx := r.Context()
+	servers, err := s.surfsharkServers(ctx, false)
+	if err != nil && len(servers) == 0 {
+		return nil, errStatus(http.StatusBadGateway, err.Error())
+	}
+	known := map[string]bool{}
+	for _, sv := range servers {
+		known[sv.ID()] = true
+	}
+	sel, err := s.selection(ctx)
+	if err != nil {
+		return nil, err
+	}
+	active := map[string]bool{}
+	rows, err := s.activeLanes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, l := range rows {
+		active[l.ID] = true
+	}
+	var added []string
+	for _, loc := range in.Locations {
+		loc = strings.ToLower(strings.TrimSpace(loc))
+		if !known[loc] {
+			return nil, errFields(map[string]string{"locations": "unknown location " + loc})
+		}
+		sel.ExcludeLocations = without(sel.ExcludeLocations, loc)
+		if !contains(sel.Locations, loc) {
+			sel.Locations = append(sel.Locations, loc)
+		}
+		if !active["surfshark:"+loc] {
+			added = append(added, loc)
+		}
+	}
+	if len(in.Locations) == 0 {
+		return nil, errFields(map[string]string{"locations": "choose at least one location"})
+	}
+	sel.Lanes += len(added)
+	if err := s.putSetting(ctx, "surfshark.selection", sel); err != nil {
+		return nil, err
+	}
+	syncErr := s.syncLanes(ctx)
+	s.audit(ctx, who(r), "admin.lanes_added", "added lanes: "+strings.Join(in.Locations, ", "))
+	if syncErr != nil {
+		return nil, errStatus(http.StatusBadGateway, syncErr.Error())
+	}
+	return s.listLanesData(ctx)
+}
+
+// removeLane removes a lane. Surfshark locations are unpinned and excluded so
+// they aren't picked again (and the lane count shrinks so no other location
+// replaces it); WireGuard lanes delete their config.
+func (s *Server) removeLane(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id := laneParam(r)
+	ctx := r.Context()
+	provider, name, ok := strings.Cut(id, ":")
+	if !ok {
+		return nil, errNotFound
+	}
+	switch provider {
+	case "surfshark":
+		sel, err := s.selection(ctx)
+		if err != nil {
+			return nil, err
+		}
+		var exists bool
+		if err := s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM lanes WHERE id = $1 AND active)`, id).Scan(&exists); err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, errNotFound
+		}
+		sel.Locations = without(sel.Locations, name)
+		if !contains(sel.ExcludeLocations, name) {
+			sel.ExcludeLocations = append(sel.ExcludeLocations, name)
+		}
+		sel.Lanes = max(0, sel.Lanes-1)
+		if err := s.putSetting(ctx, "surfshark.selection", sel); err != nil {
+			return nil, err
+		}
+	case "wireguard":
+		tag, err := s.db.Exec(ctx, `DELETE FROM wireguard_configs WHERE 'wireguard:' || id = $1`, id)
+		if err != nil {
+			return nil, err
+		}
+		if tag.RowsAffected() == 0 {
+			return nil, errNotFound
+		}
+	default:
+		return nil, errNotFound
+	}
+	if err := s.syncLanes(ctx); err != nil {
+		s.log.Warn("lane sync after removing a lane", "err", err)
+	}
+	s.audit(ctx, who(r), "admin.lane_removed", "removed lane "+id)
+	return nil, nil
+}
+
+func contains(list []string, v string) bool {
+	for _, x := range list {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
+func without(list []string, v string) []string {
+	out := []string{}
+	for _, x := range list {
+		if x != v {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
 func (s *Server) restartLane(_ http.ResponseWriter, r *http.Request) (any, error) {
 	id := laneParam(r)
 	if err := s.engine.post(r.Context(), "/v1/lanes/"+url.PathEscape(id)+"/restart", nil, nil); err != nil {
@@ -245,8 +373,8 @@ func (s *Server) syncLanes(ctx context.Context) error {
 			syncSurfshark, fetchErr = false, err
 		}
 		selected = surfshark.Select(servers, surfshark.Filter{
-			Locations: sel.Locations, Countries: sel.Countries, ExcludeCountries: sel.ExcludeCountries,
-			IncludeVirtual: sel.IncludeVirtual,
+			Locations: sel.Locations, ExcludeLocations: sel.ExcludeLocations, Countries: sel.Countries,
+			ExcludeCountries: sel.ExcludeCountries, IncludeVirtual: sel.IncludeVirtual,
 		}, sel.Lanes)
 	}
 	tx, err := s.db.Begin(ctx)

@@ -234,7 +234,8 @@ func (s *Server) putSurfsharkSelection(w http.ResponseWriter, r *http.Request) (
 		}
 		return out
 	}
-	in.Countries, in.ExcludeCountries, in.Locations = norm(in.Countries), norm(in.ExcludeCountries), norm(in.Locations)
+	in.Countries, in.ExcludeCountries = norm(in.Countries), norm(in.ExcludeCountries)
+	in.Locations, in.ExcludeLocations = norm(in.Locations), norm(in.ExcludeLocations)
 	ctx := r.Context()
 	if err := s.putSetting(ctx, "surfshark.selection", in); err != nil {
 		return nil, err

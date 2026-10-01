@@ -33,12 +33,14 @@ type SurfsharkSelection struct {
 	Lanes            int      `json:"lanes"`
 	Countries        []string `json:"countries"`
 	ExcludeCountries []string `json:"excludeCountries"`
-	Locations        []string `json:"locations"`
+	Locations        []string `json:"locations"`        // pinned: always lanes
+	ExcludeLocations []string `json:"excludeLocations"` // removed: never picked automatically
 	IncludeVirtual   bool     `json:"includeVirtual"`
 }
 
 func defaultSelection() SurfsharkSelection {
-	return SurfsharkSelection{Lanes: 20, Countries: []string{}, ExcludeCountries: []string{}, Locations: []string{}, IncludeVirtual: true}
+	return SurfsharkSelection{Lanes: 0, Countries: []string{}, ExcludeCountries: []string{}, Locations: []string{},
+		ExcludeLocations: []string{}, IncludeVirtual: true}
 }
 
 // getSetting loads a JSON setting into v (which holds the defaults beforehand).
@@ -79,6 +81,9 @@ func (s *Server) appSettings(ctx context.Context) (AppSettings, error) {
 func (s *Server) selection(ctx context.Context) (SurfsharkSelection, error) {
 	st := defaultSelection()
 	err := s.getSetting(ctx, "surfshark.selection", &st)
+	if st.ExcludeLocations == nil {
+		st.ExcludeLocations = []string{}
+	}
 	return st, err
 }
 

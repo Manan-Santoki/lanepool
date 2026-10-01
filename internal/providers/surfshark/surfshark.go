@@ -89,39 +89,40 @@ func Fetch(ctx context.Context, url string) ([]Server, error) {
 
 // Filter limits which locations are used.
 type Filter struct {
-	Locations        []string // exact location IDs in order; overrides the rest
-	Countries        []string // ISO codes to include (empty = all)
+	Locations        []string // pinned location IDs: always used, in this order
+	ExcludeLocations []string // never used unless pinned
+	Countries        []string // ISO codes to fill from (empty = all)
 	ExcludeCountries []string
 	IncludeVirtual   bool
 }
 
-// Select picks up to limit servers.
+// Select picks servers: every pinned location first (even beyond limit), then
+// more locations from the country filters until limit is reached.
 //
-// With Filter.Locations the given order is kept. Otherwise locations are spread
-// across countries: every country's first location, then every country's second,
-// and so on. Ordering is alphabetical, not by load, so lanes keep their order
-// across restarts.
+// Filled locations are spread across countries: every country's first
+// location, then every country's second, and so on. Ordering is alphabetical,
+// not by load, so lanes keep their order across restarts.
 func Select(servers []Server, f Filter, limit int) []Server {
-	if len(f.Locations) > 0 {
-		byID := make(map[string]Server, len(servers))
-		for _, s := range servers {
-			byID[s.ID()] = s
-		}
-		var out []Server
-		for _, id := range f.Locations {
-			if s, ok := byID[strings.ToLower(strings.TrimSpace(id))]; ok && len(out) < limit {
-				out = append(out, s)
-			}
-		}
-		return out
+	byID := make(map[string]Server, len(servers))
+	for _, s := range servers {
+		byID[s.ID()] = s
 	}
-
+	var out []Server
+	used := map[string]bool{}
+	for _, id := range f.Locations {
+		id = strings.ToLower(strings.TrimSpace(id))
+		if s, ok := byID[id]; ok && !used[id] {
+			out = append(out, s)
+			used[id] = true
+		}
+	}
+	excludeLoc := toSet(f.ExcludeLocations)
 	include := toSet(f.Countries)
 	exclude := toSet(f.ExcludeCountries)
 	perCountry := map[string][]Server{}
 	for _, s := range servers {
 		cc := strings.ToLower(s.CountryCode)
-		if len(include) > 0 && !include[cc] || exclude[cc] || (!f.IncludeVirtual && s.Virtual()) {
+		if used[s.ID()] || excludeLoc[s.ID()] || len(include) > 0 && !include[cc] || exclude[cc] || (!f.IncludeVirtual && s.Virtual()) {
 			continue
 		}
 		perCountry[cc] = append(perCountry[cc], s)
@@ -133,7 +134,6 @@ func Select(servers []Server, f Filter, limit int) []Server {
 	}
 	sort.Strings(codes)
 
-	var out []Server
 	for depth := 0; len(out) < limit; depth++ {
 		added := false
 		for _, cc := range codes {
