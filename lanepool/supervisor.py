@@ -297,6 +297,8 @@ class Supervisor:
                     lane.status = "up"
         except Exception as exc:  # noqa: BLE001 - any failure marks the lane down
             with self.lock:
+                if lane.parked:
+                    return  # a check that raced with parking; keep the backoff message
                 lane.last_error = str(exc) or exc.__class__.__name__
                 lane.failed_checks += 1
                 if lane.proc is not None and not lane.parked:
