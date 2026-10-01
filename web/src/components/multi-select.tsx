@@ -67,7 +67,10 @@ export function MultiSelect({
 
   return (
     <div className={cn("space-y-2", className)}>
+      {/* modal: the list renders in a portal outside any surrounding Dialog, whose
+          scroll lock would otherwise swallow wheel and touch scrolling. */}
       <Popover
+        modal
         open={open}
         onOpenChange={(o) => {
           setOpen(o)
