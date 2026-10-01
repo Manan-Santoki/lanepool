@@ -353,6 +353,15 @@ func (e *Engine) Router() http.Handler {
 			e.mu.Unlock()
 			writeJSON(w, http.StatusAccepted, map[string]bool{"ok": true})
 		})
+		r.Post("/v1/sticky/forget", func(w http.ResponseWriter, req *http.Request) {
+			var in struct{ Username, Session string }
+			if err := json.NewDecoder(req.Body).Decode(&in); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad request"})
+				return
+			}
+			e.policy.ForgetSticky(in.Username, in.Session)
+			writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+		})
 		r.Post("/v1/config/reload", func(w http.ResponseWriter, _ *http.Request) {
 			e.Reload()
 			writeJSON(w, http.StatusAccepted, map[string]bool{"ok": true})

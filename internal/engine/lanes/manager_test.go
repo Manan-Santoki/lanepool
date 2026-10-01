@@ -192,6 +192,27 @@ func TestApplyKeepsUnchangedLanesRunning(t *testing.T) {
 		t.Fatal("unchanged lane was restarted")
 	}
 
+	// Adding a key (lane order of keys changes) must not reconnect the lane.
+	extraPriv, _ := wgtest.KeyPair()
+	spec.Keys = append([]protocol.LaneKey{{ID: 99, PrivateKey: extraPriv}}, spec.Keys...)
+	m.Apply(testSettings(), []protocol.LaneSpec{spec})
+	m.mu.Lock()
+	afterKey := m.lanes["a"].tun
+	m.mu.Unlock()
+	if afterKey != before || state(m, "a").KeyID != 1 {
+		t.Fatalf("adding a key reconnected the lane or changed its key: %+v", state(m, "a"))
+	}
+
+	// Removing the key in use does reconnect, with a remaining key.
+	spec.Keys = spec.Keys[:1]
+	m.Apply(testSettings(), []protocol.LaneSpec{spec})
+	m.mu.Lock()
+	afterRemove := m.lanes["a"].tun
+	m.mu.Unlock()
+	if afterRemove == before {
+		t.Fatal("lane kept using a removed key")
+	}
+
 	spec.Enabled = false
 	m.Apply(testSettings(), []protocol.LaneSpec{spec})
 	if s := state(m, "a"); s.Status != protocol.LaneDisabled {

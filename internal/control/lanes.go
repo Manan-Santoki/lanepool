@@ -1,0 +1,325 @@
+package control
+
+import (
+	"context"
+	"crypto/rand"
+	"fmt"
+	"math/big"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
+
+	"github.com/Manan-Santoki/lanepool/internal/protocol"
+	"github.com/Manan-Santoki/lanepool/internal/providers/surfshark"
+)
+
+// Lane is a lane as the dashboard sees it: definition plus runtime state.
+type Lane struct {
+	ID                string     `json:"id"`
+	Name              string     `json:"name"`
+	Provider          string     `json:"provider"`
+	Country           string     `json:"country,omitempty"`
+	CountryCode       string     `json:"countryCode,omitempty"`
+	City              string     `json:"city,omitempty"`
+	Virtual           bool       `json:"virtual,omitempty"`
+	Enabled           bool       `json:"enabled"`
+	Status            string     `json:"status"`
+	KeyID             int64      `json:"keyId,omitempty"`
+	KeyLabel          string     `json:"keyLabel,omitempty"`
+	ExitIP            string     `json:"exitIp,omitempty"`
+	LatencyMs         int        `json:"latencyMs,omitempty"`
+	LastHandshake     *time.Time `json:"lastHandshake,omitempty"`
+	ActiveConnections int        `json:"activeConnections"`
+	RxBytes           uint64     `json:"rxBytes"`
+	TxBytes           uint64     `json:"txBytes"`
+	Restarts          int        `json:"restarts"`
+	LastError         string     `json:"lastError,omitempty"`
+	NextRetry         *time.Time `json:"nextRetry,omitempty"`
+}
+
+type laneRow struct {
+	ID, Provider, Name, Country, CountryCode, City, Endpoint, PeerKey string
+	Virtual, Enabled                                                  bool
+}
+
+func (s *Server) activeLanes(ctx context.Context) ([]laneRow, error) {
+	rows, err := s.db.Query(ctx, `SELECT id, provider, name, country, country_code, city, endpoint, peer_key, virtual, enabled
+		FROM lanes WHERE active ORDER BY position, id`)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (laneRow, error) {
+		var l laneRow
+		err := row.Scan(&l.ID, &l.Provider, &l.Name, &l.Country, &l.CountryCode, &l.City, &l.Endpoint, &l.PeerKey, &l.Virtual, &l.Enabled)
+		return l, err
+	})
+}
+
+// listLanesData merges lane definitions with the engine's latest state.
+func (s *Server) listLanesData(ctx context.Context) ([]Lane, error) {
+	rows, err := s.activeLanes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	labels, err := s.keyLabels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	states, _ := s.latestLaneStates()
+	out := make([]Lane, 0, len(rows))
+	for _, r := range rows {
+		l := Lane{ID: r.ID, Name: r.Name, Provider: r.Provider, Country: r.Country, CountryCode: r.CountryCode,
+			City: r.City, Virtual: r.Virtual, Enabled: r.Enabled, Status: protocol.LaneQueued}
+		if !r.Enabled {
+			l.Status = protocol.LaneDisabled
+		}
+		if st, ok := states[r.ID]; ok {
+			l.Status, l.KeyID, l.ExitIP, l.LatencyMs = st.Status, st.KeyID, st.ExitIP, st.LatencyMs
+			l.LastHandshake, l.ActiveConnections, l.RxBytes, l.TxBytes = st.LastHandshake, st.ActiveConnections, st.RxBytes, st.TxBytes
+			l.Restarts, l.LastError, l.NextRetry = st.Restarts, st.LastError, st.NextRetry
+			l.KeyLabel = labels[st.KeyID]
+		}
+		out = append(out, l)
+	}
+	return out, nil
+}
+
+func (s *Server) listLanes(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.listLanesData(r.Context())
+}
+
+func laneParam(r *http.Request) string {
+	id, _ := url.PathUnescape(chi.URLParam(r, "lane"))
+	return id
+}
+
+func (s *Server) patchLane(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id := laneParam(r)
+	var in struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := decode(r, &in); err != nil {
+		return nil, err
+	}
+	if in.Enabled == nil {
+		return nil, errFields(map[string]string{"enabled": "required"})
+	}
+	ctx := r.Context()
+	tag, err := s.db.Exec(ctx, `UPDATE lanes SET enabled = $2, updated_at = now() WHERE id = $1`, id, *in.Enabled)
+	if err != nil {
+		return nil, err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, errNotFound
+	}
+	verb := "disabled"
+	if *in.Enabled {
+		verb = "enabled"
+	}
+	s.audit(ctx, who(r), "admin.lane_"+verb, verb+" lane "+id)
+	s.configChanged()
+	lanes, err := s.listLanesData(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, l := range lanes {
+		if l.ID == id {
+			return l, nil
+		}
+	}
+	return nil, errNotFound
+}
+
+func (s *Server) restartLane(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id := laneParam(r)
+	if err := s.engine.post(r.Context(), "/v1/lanes/"+url.PathEscape(id)+"/restart", nil, nil); err != nil {
+		return nil, engineErr(err)
+	}
+	s.audit(r.Context(), who(r), "admin.lane_restart", "restarted lane "+id)
+	return status(http.StatusAccepted), nil
+}
+
+func (s *Server) restartAllLanes(_ http.ResponseWriter, r *http.Request) (any, error) {
+	if err := s.engine.post(r.Context(), "/v1/lanes/restart-all", nil, nil); err != nil {
+		return nil, engineErr(err)
+	}
+	s.audit(r.Context(), who(r), "admin.lanes_restart_all", "restarted all lanes (paced)")
+	return status(http.StatusAccepted), nil
+}
+
+func (s *Server) randomLane(_ http.ResponseWriter, r *http.Request) (any, error) {
+	lanes, err := s.listLanesData(r.Context())
+	if err != nil {
+		return nil, err
+	}
+	country := strings.ToLower(r.URL.Query().Get("country"))
+	var up []Lane
+	for _, l := range lanes {
+		if l.Status == protocol.LaneUp && (country == "" || strings.ToLower(l.CountryCode) == country) {
+			up = append(up, l)
+		}
+	}
+	if len(up) == 0 {
+		return nil, errStatus(http.StatusServiceUnavailable, "no healthy lane")
+	}
+	n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(up))))
+	return up[n.Int64()], nil
+}
+
+// --- building lanes from providers -------------------------------------------
+
+// laneSpecs returns the engine's lane definitions, including the keys each
+// lane may use.
+func (s *Server) laneSpecs(ctx context.Context) ([]protocol.LaneSpec, error) {
+	rows, err := s.activeLanes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	keys, err := s.enabledKeys(ctx)
+	if err != nil {
+		return nil, err
+	}
+	wgs, err := s.wireguardSpecs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []protocol.LaneSpec
+	i := 0
+	for _, r := range rows {
+		spec := protocol.LaneSpec{ID: r.ID, Name: r.Name, Provider: r.Provider, Country: r.Country,
+			CountryCode: r.CountryCode, City: r.City, Virtual: r.Virtual, Enabled: r.Enabled}
+		switch r.Provider {
+		case "surfshark":
+			spec.Endpoint, spec.PeerKey = r.Endpoint, r.PeerKey
+			spec.Addresses = []string{surfshark.TunnelAddress.String()}
+			for _, d := range surfshark.DNS {
+				spec.DNS = append(spec.DNS, d.String())
+			}
+			// Spread lanes across keys: lane i starts with key i mod n. Order
+			// changes when keys are added; the engine keeps lanes on their
+			// current key unless it was removed.
+			if n := len(keys); n > 0 {
+				for k := 0; k < n; k++ {
+					spec.Keys = append(spec.Keys, keys[(i+k)%n])
+				}
+			}
+			i++
+		case "wireguard":
+			w, ok := wgs[r.ID]
+			if !ok {
+				continue
+			}
+			spec.Endpoint, spec.PeerKey, spec.PresharedKey = w.Endpoint, w.PeerKey, w.PresharedKey
+			spec.Addresses, spec.DNS, spec.MTU, spec.Keys = w.Addresses, w.DNS, w.MTU, w.Keys
+		}
+		out = append(out, spec)
+	}
+	return out, nil
+}
+
+// syncLanes rebuilds the lanes table from the Surfshark selection and the
+// WireGuard configs. Lanes keep their row (and enabled flag) when they stay
+// selected.
+func (s *Server) syncLanes(ctx context.Context) error {
+	sel, err := s.selection(ctx)
+	if err != nil {
+		return err
+	}
+	var keys int
+	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM provider_keys WHERE provider = 'surfshark' AND enabled`).Scan(&keys); err != nil {
+		return err
+	}
+	// Surfshark lanes only exist once there is a key to connect with. If the
+	// server list can't be fetched, the current Surfshark lanes are kept as they
+	// are and the other providers still sync.
+	var selected []surfshark.Server
+	syncSurfshark := true
+	var fetchErr error
+	if sel.Lanes > 0 && keys > 0 {
+		servers, err := s.surfsharkServers(ctx, false)
+		if err != nil && len(servers) == 0 {
+			syncSurfshark, fetchErr = false, err
+		}
+		selected = surfshark.Select(servers, surfshark.Filter{
+			Locations: sel.Locations, Countries: sel.Countries, ExcludeCountries: sel.ExcludeCountries,
+			IncludeVirtual: sel.IncludeVirtual,
+		}, sel.Lanes)
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if syncSurfshark {
+		if _, err := tx.Exec(ctx, `UPDATE lanes SET active = false WHERE provider = 'surfshark'`); err != nil {
+			return err
+		}
+	}
+	for i, srv := range selected {
+		_, err := tx.Exec(ctx, `INSERT INTO lanes (id, provider, name, country, country_code, city, virtual, endpoint, peer_key, position, active)
+			VALUES ($1, 'surfshark', $2, $3, $4, $5, $6, $7, $8, $9, true)
+			ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, country = EXCLUDED.country, country_code = EXCLUDED.country_code,
+				city = EXCLUDED.city, virtual = EXCLUDED.virtual, endpoint = EXCLUDED.endpoint, peer_key = EXCLUDED.peer_key,
+				position = EXCLUDED.position, active = true, updated_at = now()`,
+			"surfshark:"+srv.ID(), srv.ID(), srv.Country, strings.ToUpper(srv.CountryCode), srv.Location, srv.Virtual(),
+			srv.Endpoint(), srv.PubKey, i)
+		if err != nil {
+			return err
+		}
+	}
+	// WireGuard configs come after the Surfshark lanes.
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO lanes (id, provider, name, country_code, city, endpoint, peer_key, position, enabled, active)
+		SELECT 'wireguard:' || id, 'wireguard', name, upper(country_code), city, endpoint, peer_key, 100000 + id, enabled, true
+		FROM wireguard_configs
+		ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, country_code = EXCLUDED.country_code, city = EXCLUDED.city,
+			endpoint = EXCLUDED.endpoint, peer_key = EXCLUDED.peer_key, enabled = EXCLUDED.enabled, active = true, updated_at = now()`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE lanes SET active = false WHERE provider = 'wireguard'
+		AND id NOT IN (SELECT 'wireguard:' || id FROM wireguard_configs)`); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	s.configChanged()
+	return fetchErr
+}
+
+func (s *Server) laneSyncLoop(ctx context.Context) {
+	t := time.NewTicker(6 * time.Hour) // pick up Surfshark server changes
+	defer t.Stop()
+	for {
+		if err := s.syncLanes(ctx); err != nil && ctx.Err() == nil {
+			s.log.Warn("lane sync failed", "err", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		case <-s.syncRequired:
+		}
+	}
+}
+
+// surfsharkServers returns the cached server list, refreshing it when older
+// than an hour (or when force is set).
+func (s *Server) surfsharkServers(ctx context.Context, force bool) ([]surfshark.Server, error) {
+	s.serversMu.Lock()
+	defer s.serversMu.Unlock()
+	if !force && len(s.servers) > 0 && time.Since(s.serversAt) < time.Hour {
+		return s.servers, nil
+	}
+	servers, err := surfshark.Fetch(ctx, s.cfg.SurfsharkAPI)
+	if err != nil {
+		s.serversErr = err.Error()
+		return s.servers, fmt.Errorf("fetch Surfshark servers: %w", err)
+	}
+	s.servers, s.serversAt, s.serversErr = servers, time.Now(), ""
+	return servers, nil
+}

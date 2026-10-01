@@ -374,9 +374,9 @@ func stickyKey(u *user, params Params, client netip.Addr) (string, time.Duration
 		if ttl == 0 {
 			ttl = 10 * time.Minute
 		}
-		return u.spec.Username + "|s|" + params.Session, ttl
+		return strings.ToLower(u.spec.Username) + "|s|" + params.Session, ttl
 	case ttl > 0:
-		return u.spec.Username + "|ip|" + client.String(), ttl
+		return strings.ToLower(u.spec.Username) + "|ip|" + client.String(), ttl
 	}
 	return "", 0
 }
@@ -410,7 +410,7 @@ func (p *Policy) stickySet(key, lane string, ttl time.Duration) {
 func (p *Policy) ForgetSticky(username, session string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	delete(p.sticky, username+"|s|"+session)
+	delete(p.sticky, strings.ToLower(username)+"|s|"+session)
 }
 
 func clientAddr(a net.Addr) netip.Addr {

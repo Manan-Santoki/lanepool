@@ -125,14 +125,25 @@ func (m *Manager) Apply(settings protocol.EngineSettings, specs []protocol.LaneS
 			m.stop(l)
 			l.spec = spec
 			l.status = protocol.LaneDisabled
-		case tunnelChanged(l.spec, spec):
+		case tunnelChanged(l.spec, spec) || !hasKey(spec.Keys, l.keyID()):
+			// Peer settings changed, or the key in use was removed: reconnect.
 			m.stop(l)
 			l.spec = spec
 			l.keyIdx = 0
-			l.status = protocol.LaneQueued
-			l.nextStart = time.Time{}
+			if l.status != protocol.LaneBackoff {
+				l.status = protocol.LaneQueued
+				l.nextStart = time.Time{}
+			}
 		default:
-			l.spec = spec // metadata only (name, country)
+			// Same peer and the current key is still allowed: keep the tunnel and
+			// just follow the key's new position in the list.
+			cur := l.keyID()
+			l.spec = spec
+			for i, k := range spec.Keys {
+				if k.ID == cur {
+					l.keyIdx = i
+				}
+			}
 			if l.status == protocol.LaneDisabled {
 				l.status = protocol.LaneQueued
 			}
@@ -150,14 +161,21 @@ func (m *Manager) Apply(settings protocol.EngineSettings, specs []protocol.LaneS
 	m.order = order
 }
 
+// tunnelChanged reports whether the WireGuard peer settings differ. Key list
+// changes are handled separately so that adding a key doesn't reconnect lanes.
 func tunnelChanged(a, b protocol.LaneSpec) bool {
-	if a.Endpoint != b.Endpoint || a.PeerKey != b.PeerKey || a.PresharedKey != b.PresharedKey ||
+	return a.Endpoint != b.Endpoint || a.PeerKey != b.PeerKey || a.PresharedKey != b.PresharedKey ||
 		a.MTU != b.MTU || strings.Join(a.Addresses, ",") != strings.Join(b.Addresses, ",") ||
-		strings.Join(a.DNS, ",") != strings.Join(b.DNS, ",") || len(a.Keys) != len(b.Keys) {
+		strings.Join(a.DNS, ",") != strings.Join(b.DNS, ",")
+}
+
+// hasKey reports whether keys contains id; lanes without keys yet (id 0) count as present.
+func hasKey(keys []protocol.LaneKey, id int64) bool {
+	if id == 0 {
 		return true
 	}
-	for i := range a.Keys {
-		if a.Keys[i] != b.Keys[i] {
+	for _, k := range keys {
+		if k.ID == id {
 			return true
 		}
 	}
