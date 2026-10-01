@@ -110,7 +110,8 @@ change that range to `10001-<10000 + LANES>`.
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/healthz` | `200` when the rotating proxy runs and at least one lane is up (no auth) |
+| GET | `/healthz` | `200` while lanepool is running, regardless of lanes; used by the container health check (no auth) |
+| GET | `/readyz` | `200` when the rotating proxy runs and at least one lane is up (no auth) |
 | GET | `/api/status` | Summary plus every lane |
 | GET | `/api/lanes` | All lanes |
 | GET | `/api/rotation-test` | Sends 6 requests through the rotating proxy and lists the exit IPs seen |
@@ -119,7 +120,7 @@ change that range to `10001-<10000 + LANES>`.
 | POST | `/api/lanes/{lane}/restart` | Reconnect a lane |
 | POST | `/api/lanes/{lane}/check` | Re-check a lane's exit IP now |
 
-When `PROXY_USER` and `PROXY_PASS` are set, everything except `/healthz` requires HTTP
+When `PROXY_USER` and `PROXY_PASS` are set, everything except `/healthz` and `/readyz` requires HTTP
 basic auth with the same credentials.
 
 ### Example: Python

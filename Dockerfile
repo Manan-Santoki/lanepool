@@ -42,6 +42,6 @@ ENV PYTHONUNBUFFERED=1 \
 USER lanepool
 WORKDIR /app
 EXPOSE 8080 8000
-HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --start-interval=2s --retries=3 \
   CMD python -c "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/healthz' % os.environ.get('API_PORT','8000'), timeout=4)"
 ENTRYPOINT ["python", "-m", "lanepool"]

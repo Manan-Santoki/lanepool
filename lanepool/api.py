@@ -98,8 +98,14 @@ def make_server(sup: Supervisor) -> ThreadingHTTPServer:
         def do_GET(self):  # noqa: N802
             path = self.path.split("?", 1)[0].rstrip("/") or "/"
             if path == "/healthz":
+                # Liveness only. Lanes connect in the background and may take a while
+                # (or be paused), and Traefik stops routing to containers that aren't
+                # healthy, so lane state must not affect this.
+                ok = sup.alive() or time.time() - sup.started_at < 30
+                return self._json(200 if ok else 503, {"alive": ok})
+            if path == "/readyz":
                 ok = sup.healthy()
-                return self._json(200 if ok else 503, {"healthy": ok})
+                return self._json(200 if ok else 503, {"ready": ok})
             if not self._authorized():
                 return self._json(401, {"error": "unauthorized"})
             if path == "/":

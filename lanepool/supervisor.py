@@ -382,6 +382,11 @@ class Supervisor:
 
     # --- lifecycle ---------------------------------------------------------
 
+    def alive(self) -> bool:
+        """The rotating proxy process is running. Says nothing about lanes."""
+        with self.lock:
+            return self.glider is not None and self.glider.poll() is None
+
     def healthy(self) -> bool:
         with self.lock:
             if self.glider is None or self.glider.poll() is not None:

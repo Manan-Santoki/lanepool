@@ -199,6 +199,7 @@ class EndToEndTest(unittest.TestCase):
 
         base = f"http://127.0.0.1:{s.api_port}"
         self.assertEqual(urllib.request.urlopen(base + "/healthz").status, 200)
+        self.assertEqual(urllib.request.urlopen(base + "/readyz").status, 200)
         with self.assertRaises(urllib.error.HTTPError) as ctx:
             urllib.request.urlopen(base + "/api/status")
         self.assertEqual(ctx.exception.code, 401)
@@ -267,6 +268,15 @@ class EndToEndTest(unittest.TestCase):
             queued = [l for l in sup.lanes if l.status == "queued"]
         time.sleep(3)
         self.assertTrue(all(l.status == "queued" for l in queued))
+
+    def test_healthz_ok_while_lanes_are_still_connecting(self):
+        sup, s = self.run_supervisor(1, dead={0}, connect_timeout=600)
+        base = f"http://127.0.0.1:{s.api_port}"
+        self.wait_for(lambda: sup.alive())
+        self.assertEqual(urllib.request.urlopen(base + "/healthz").status, 200)
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(base + "/readyz")
+        self.assertEqual(ctx.exception.code, 503)
 
     def test_restart_via_api(self):
         sup, s = self.run_supervisor(1)
