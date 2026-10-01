@@ -1,0 +1,28 @@
+services:
+  lanepool:
+    image: ghcr.io/manan-santoki/lanepool:latest
+    build: .
+    container_name: lanepool
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      # Rotating proxy (HTTP + SOCKS5 on the same port)
+      - "${BIND_IP:-127.0.0.1}:${PROXY_PORT:-8080}:${PROXY_PORT:-8080}"
+      # Dashboard + JSON API
+      - "${BIND_IP:-127.0.0.1}:${API_PORT:-8000}:${API_PORT:-8000}"
+      # One SOCKS5 port per lane, for pinning requests to a single exit IP.
+      # Keep this range in sync with LANES (10001 .. 10000 + LANES).
+      - "${BIND_IP:-127.0.0.1}:10001-10099:10001-10099"
+    volumes:
+      # Optional: any extra WireGuard .conf files (any provider) become lanes too.
+      - ./configs:/config/wireguard:ro
+    tmpfs:
+      - /run/lanepool:mode=0700,uid=10001,gid=10001
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    ulimits:
+      nofile: { soft: 65536, hard: 65536 }
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
