@@ -24,7 +24,7 @@ func TestHandshakeAndHTTPThroughTunnel(t *testing.T) {
 	defer tun.Close()
 
 	client := http.Client{
-		Timeout: 10 * time.Second,
+		Timeout:   10 * time.Second,
 		Transport: &http.Transport{DialContext: tun.DialContext},
 	}
 	// Resolved through the provider's DNS, inside the tunnel.
