@@ -1,15 +1,16 @@
 # lanepool on Dokploy.
 #
+# Compose path: ./deploy/docker-compose.dokploy.yml. Set the variables below in
+# Dokploy's Environment tab (Dokploy passes them to compose for ${...}).
+#
 # - control joins dokploy-network so a Dokploy domain (port 8000) can route the
-#   dashboard; engine joins it as "lanepool" so other apps use lanepool:8080 and
-#   Traefik can expose it as an HTTPS proxy (see traefik-public-proxy.yml).
+#   dashboard.
+# - engine joins it as "lanepool": other Dokploy apps use lanepool:8080, and
+#   Traefik exposes it as an HTTPS proxy (see traefik-public-proxy.yml).
 # - Postgres stays on the project's private network.
-# - Set the variables from .env.example in Dokploy's Environment tab.
 x-lanepool: &lanepool
-  build:
-    context: ..
+  image: lanepool:dokploy
   restart: unless-stopped
-  env_file: .env
   read_only: true
   cap_drop: [ALL]
   security_opt: [no-new-privileges:true]
@@ -35,11 +36,25 @@ services:
 
   control:
     <<: *lanepool
+    build:
+      context: ..
     command: control
     environment:
       DATABASE_URL: postgres://lanepool:${POSTGRES_PASSWORD}@db:5432/lanepool?sslmode=disable
       ENGINE_URL: http://engine:9090
-      COOKIE_SECURE: "true"
+      LANEPOOL_SECRET: ${LANEPOOL_SECRET:?set LANEPOOL_SECRET}
+      ENGINE_TOKEN: ${ENGINE_TOKEN:?set ENGINE_TOKEN}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # One-time import into an empty database (optional).
+      SURFSHARK_PRIVATE_KEYS: ${SURFSHARK_PRIVATE_KEYS:-}
+      LANES: ${LANES:-}
+      COUNTRIES: ${COUNTRIES:-}
+      PROXY_USER: ${PROXY_USER:-}
+      PROXY_PASS: ${PROXY_PASS:-}
+      PUBLIC_PROXY_HOST: ${PUBLIC_PROXY_HOST:-}
     depends_on:
       db: { condition: service_healthy }
     networks:
@@ -49,9 +64,13 @@ services:
 
   engine:
     <<: *lanepool
+    pull_policy: never # built by the control service
     command: engine
     environment:
       CONTROL_URL: http://control:8000
+      ENGINE_TOKEN: ${ENGINE_TOKEN:?set ENGINE_TOKEN}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
     ulimits:
       nofile: { soft: 65536, hard: 65536 }
     networks:
