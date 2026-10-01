@@ -1,23 +1,14 @@
-# lanepool on Dokploy.
+# lanepool on Dokploy, part 1 of 2: dashboard/API (control) + Postgres.
 #
-# Compose path: ./deploy/docker-compose.dokploy.yml. Set the variables below in
-# Dokploy's Environment tab (Dokploy passes them to compose for ${...}).
+# Dokploy compose service with compose path ./deploy/dokploy-control.yml.
+# Redeploying this never touches the VPN lanes; they live in the engine service
+# (./deploy/dokploy-engine.yml), deployed separately.
 #
-# - control joins dokploy-network so a Dokploy domain (port 8000) can route the
-#   dashboard.
-# - engine joins it as "lanepool": other Dokploy apps use lanepool:8080, and
-#   Traefik exposes it as an HTTPS proxy (see traefik-public-proxy.yml).
-# - Postgres stays on the project's private network.
-x-lanepool: &lanepool
-  image: lanepool:dokploy
-  restart: unless-stopped
-  read_only: true
-  cap_drop: [ALL]
-  security_opt: [no-new-privileges:true]
-  logging:
-    driver: json-file
-    options: { max-size: "10m", max-file: "3" }
-
+# Environment (Dokploy → Environment):
+#   LANEPOOL_SECRET, ENGINE_TOKEN, POSTGRES_PASSWORD   required
+#   ADMIN_EMAIL, ADMIN_PASSWORD                         first admin (optional)
+#   ENGINE_URL                                          default http://lanepool:9090
+# Add a domain for service "control", port 8000.
 services:
   db:
     image: postgres:17-alpine
@@ -35,13 +26,17 @@ services:
     networks: [default]
 
   control:
-    <<: *lanepool
     build:
       context: ..
+    image: lanepool:control
     command: control
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     environment:
       DATABASE_URL: postgres://lanepool:${POSTGRES_PASSWORD}@db:5432/lanepool?sslmode=disable
-      ENGINE_URL: http://engine:9090
+      ENGINE_URL: ${ENGINE_URL:-http://lanepool:9090}
       LANEPOOL_SECRET: ${LANEPOOL_SECRET:?set LANEPOOL_SECRET}
       ENGINE_TOKEN: ${ENGINE_TOKEN:?set ENGINE_TOKEN}
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
@@ -57,26 +52,13 @@ services:
       PUBLIC_PROXY_HOST: ${PUBLIC_PROXY_HOST:-}
     depends_on:
       db: { condition: service_healthy }
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
     networks:
       default:
       dokploy-network:
         aliases: [lanepool-control]
-
-  engine:
-    <<: *lanepool
-    pull_policy: never # built by the control service
-    command: engine
-    environment:
-      CONTROL_URL: http://control:8000
-      ENGINE_TOKEN: ${ENGINE_TOKEN:?set ENGINE_TOKEN}
-      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-    ulimits:
-      nofile: { soft: 65536, hard: 65536 }
-    networks:
-      default:
-      dokploy-network:
-        aliases: [lanepool]
 
 volumes:
   db:

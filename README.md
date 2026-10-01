@@ -125,9 +125,14 @@ proxy passwords; open proxies are found and abused within hours.
 
 ### Dokploy
 
-Use [`deploy/docker-compose.dokploy.yml`](deploy/docker-compose.dokploy.yml) as
-the compose path:
-- **Dashboard:** add a domain for service `control`, port `8000`.
+Create two compose services from this repo, so dashboard updates never restart
+the VPN lanes:
+
+1. **Control:** compose path `./deploy/dokploy-control.yml` (Postgres and
+   dashboard). Add a domain for service `control`, port `8000`.
+2. **Engine:** compose path `./deploy/dokploy-engine.yml`. Use the same
+   `ENGINE_TOKEN` as the control service.
+
 - **Proxy for other Dokploy apps:** `http://USER:PASS@lanepool:8080`.
 - **Public HTTPS proxy:** use the Traefik file above.
 

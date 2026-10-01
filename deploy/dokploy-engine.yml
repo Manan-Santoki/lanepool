@@ -1,0 +1,40 @@
+# lanepool on Dokploy, part 2 of 2: the engine (VPN lanes + proxy).
+#
+# Dokploy compose service with compose path ./deploy/dokploy-engine.yml.
+# Redeploy it only when engine code changes: every engine restart reconnects all
+# lanes, and VPN providers throttle bursts of new sessions.
+#
+# Environment (Dokploy → Environment):
+#   ENGINE_TOKEN      same value as the control service
+#   CONTROL_URL       default http://lanepool-control:8000
+#   TRUSTED_PROXIES   e.g. 10.0.1.0/24 (dokploy-network) when Traefik sends PROXY protocol
+#
+# On dokploy-network the engine is "lanepool": other apps use lanepool:8080,
+# control reaches its API at lanepool:9090.
+services:
+  engine:
+    build:
+      context: ..
+    image: lanepool:engine
+    command: engine
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      CONTROL_URL: ${CONTROL_URL:-http://lanepool-control:8000}
+      ENGINE_TOKEN: ${ENGINE_TOKEN:?set ENGINE_TOKEN}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ulimits:
+      nofile: { soft: 65536, hard: 65536 }
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    networks:
+      dokploy-network:
+        aliases: [lanepool]
+
+networks:
+  dokploy-network:
+    external: true
