@@ -48,6 +48,7 @@ services:
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      SURFSHARK_USER_AGENT: ${SURFSHARK_USER_AGENT:-}
       # One-time import into an empty database (optional).
       SURFSHARK_PRIVATE_KEYS: ${SURFSHARK_PRIVATE_KEYS:-}
       LANES: ${LANES:-}
