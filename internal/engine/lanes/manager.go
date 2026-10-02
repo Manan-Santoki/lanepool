@@ -475,12 +475,14 @@ func (m *Manager) RestartAll() {
 		if l.status == protocol.LaneDisabled {
 			continue
 		}
+		if l.tun != nil || l.status == protocol.LaneBackoff {
+			l.restarts++ // untried pool candidates stay on standby
+		}
 		m.stop(l)
 		l.status = protocol.LaneQueued
 		l.nextStart = time.Time{}
 		l.retryBackoff = 0
 		l.lastError = ""
-		l.restarts++
 	}
 	m.pausedUntil = time.Time{}
 	m.trips = 0

@@ -412,6 +412,17 @@ export function LanesPage() {
             empty={
               filtered ? (
                 <EmptyState icon={<SearchIcon />} title="No lanes match" description="Try a different filter." />
+              ) : standbyCount ? (
+                <EmptyState
+                  icon={<NetworkIcon />}
+                  title="No servers connected yet"
+                  description={`${formatNumber(standbyCount)} servers are on standby. lanepool connects them a few at a time; servers that fail show here with the reason. New connections may be paused (see the banner).`}
+                  action={
+                    <Button size="sm" variant="outline" onClick={() => setStatus("all")}>
+                      Show standby servers
+                    </Button>
+                  }
+                />
               ) : (
                 <EmptyState
                   icon={<NetworkIcon />}
