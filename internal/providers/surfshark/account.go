@@ -39,8 +39,28 @@ type RemoteKey struct {
 	CreatedAt *time.Time `json:"createdAt,omitempty"`
 }
 
+// blockedPage reports whether a response is an HTML block page (Cloudflare)
+// rather than an API answer.
+func blockedPage(raw []byte) bool {
+	body := strings.ToLower(string(raw))
+	return strings.Contains(body, "cloudflare") || strings.Contains(body, "<html") || strings.Contains(body, "<!doctype")
+}
+
 // ErrAuth means Surfshark rejected the email or password.
 var ErrAuth = errors.New("Surfshark rejected the email or password")
+
+// apiError explains a failed response. Cloudflare in front of Surfshark's API
+// answers 403 with an HTML page when it blocks a client, which is not a
+// password problem.
+func apiError(what string, status int, raw []byte) error {
+	switch {
+	case status == http.StatusForbidden && blockedPage(raw):
+		return fmt.Errorf("%s: blocked by Surfshark's bot protection (Cloudflare, HTTP 403), not a password problem", what)
+	case status == http.StatusTooManyRequests:
+		return fmt.Errorf("%s: Surfshark is rate-limiting requests (HTTP 429); wait a few minutes and try again", what)
+	}
+	return fmt.Errorf("%s: HTTP %d%s", what, status, apiMessage(raw))
+}
 
 func (a *Account) base() string {
 	if a.BaseURL == "" {
@@ -68,10 +88,11 @@ func (a *Account) Login(ctx context.Context) error {
 		return err
 	}
 	switch {
-	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+	case status == http.StatusUnauthorized,
+		status == http.StatusForbidden && !blockedPage(raw):
 		return fmt.Errorf("%w (HTTP %d%s)", ErrAuth, status, apiMessage(raw))
 	case status >= 300:
-		return fmt.Errorf("Surfshark login failed: HTTP %d%s", status, apiMessage(raw))
+		return apiError("Surfshark login", status, raw)
 	}
 	if err := json.Unmarshal(raw, &out); err != nil || out.Token == "" {
 		return fmt.Errorf("Surfshark login: unexpected response%s", apiMessage(raw))
@@ -150,7 +171,7 @@ func (a *Account) call(ctx context.Context, method, path string, in, out any) er
 			continue
 		}
 		if status >= 300 {
-			return fmt.Errorf("Surfshark API %s %s: HTTP %d%s", method, path, status, apiMessage(raw))
+			return apiError("Surfshark API "+method+" "+path, status, raw)
 		}
 		if out != nil && len(raw) > 0 {
 			if err := json.Unmarshal(raw, out); err != nil {
