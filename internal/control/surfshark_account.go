@@ -448,6 +448,9 @@ func (s *Server) manageKeys(ctx context.Context) {
 	var lanes, keys int
 	s.db.QueryRow(ctx, `SELECT count(*) FROM lanes WHERE provider = 'surfshark' AND active AND enabled`).Scan(&lanes)
 	s.db.QueryRow(ctx, `SELECT count(*) FROM provider_keys WHERE provider = 'surfshark' AND enabled`).Scan(&keys)
+	if sel, err := s.selection(ctx); err == nil && sel.AllServers {
+		lanes = min(lanes, sel.Lanes) // a pool only connects Lanes of its servers at once
+	}
 	if need := (lanes + st.LanesPerKey - 1) / st.LanesPerKey; keys < need {
 		if _, err := s.generateKeys(ctx, acct, min(need-keys, 5), fmt.Sprintf("%d lanes need %d keys at %d lanes per key", lanes, need, st.LanesPerKey)); err != nil {
 			runErr = err

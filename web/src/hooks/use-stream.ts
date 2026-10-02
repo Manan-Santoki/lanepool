@@ -1,6 +1,6 @@
 import { useEffect, useSyncExternalStore } from "react"
 import { useQueryClient, type QueryClient } from "@tanstack/react-query"
-import type { AppEvent, Overview, StreamState } from "@/lib/types"
+import type { AppEvent, Lane, Overview, StreamState } from "@/lib/types"
 import { qk } from "@/hooks/query-keys"
 
 /**
@@ -33,11 +33,36 @@ function subscribe(listener: () => void) {
 }
 
 function handleState(qc: QueryClient, data: StreamState) {
-  qc.setQueryData(qk.lanes, data.lanes)
+  if (data.partial) {
+    // Server pools only stream lanes that aren't on standby; the rest of the list
+    // comes from GET /api/lanes and anything not streamed is on standby now.
+    qc.setQueryData<Lane[]>(qk.lanes, (prev) => {
+      if (!prev) return prev
+      const live = new Map(data.lanes.map((l) => [l.id, l]))
+      return prev.map((l) => live.get(l.id) ?? (l.status === "standby" ? l : standby(l)))
+    })
+  } else {
+    qc.setQueryData(qk.lanes, data.lanes)
+  }
   qc.setQueryData<Overview>(qk.overview, (prev) =>
     prev ? { ...prev, gateway: data.gateway, engine: data.engine, activeConnections: data.activeConnections } : prev,
   )
   emit({ live: true, state: data, receivedAt: Date.now() })
+}
+
+function standby(l: Lane): Lane {
+  return {
+    ...l,
+    status: l.enabled ? "standby" : "disabled",
+    keyId: undefined,
+    keyLabel: undefined,
+    exitIp: undefined,
+    latencyMs: undefined,
+    lastHandshake: undefined,
+    activeConnections: 0,
+    lastError: undefined,
+    nextRetry: undefined,
+  }
 }
 
 function handleEvent(qc: QueryClient, ev: AppEvent) {

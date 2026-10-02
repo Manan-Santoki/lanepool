@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -69,11 +71,20 @@ func (s *Server) listLanesData(ctx context.Context) ([]Lane, error) {
 	if err != nil {
 		return nil, err
 	}
+	sel, err := s.selection(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// In a server pool, lanes the engine doesn't report haven't been needed yet.
+	idle := protocol.LaneQueued
+	if sel.AllServers {
+		idle = protocol.LaneStandby
+	}
 	states, _ := s.latestLaneStates()
 	out := make([]Lane, 0, len(rows))
 	for _, r := range rows {
 		l := Lane{ID: r.ID, Name: r.Name, Provider: r.Provider, Country: r.Country, CountryCode: r.CountryCode,
-			City: r.City, Virtual: r.Virtual, Enabled: r.Enabled, Status: protocol.LaneQueued}
+			City: r.City, Virtual: r.Virtual, Enabled: r.Enabled, Status: idle}
 		if !r.Enabled {
 			l.Status = protocol.LaneDisabled
 		}
@@ -206,6 +217,19 @@ func (s *Server) removeLane(_ http.ResponseWriter, r *http.Request) (any, error)
 	}
 	switch provider {
 	case "surfshark":
+		if strings.Contains(name, "@") {
+			// One server of a pool: switch it off; its location stays in the pool.
+			tag, err := s.db.Exec(ctx, `UPDATE lanes SET enabled = false, updated_at = now() WHERE id = $1 AND active`, id)
+			if err != nil {
+				return nil, err
+			}
+			if tag.RowsAffected() == 0 {
+				return nil, errNotFound
+			}
+			s.configChanged()
+			s.audit(ctx, who(r), "admin.lane_removed", "removed server "+id+" from the pool")
+			return nil, nil
+		}
 		sel, err := s.selection(ctx)
 		if err != nil {
 			return nil, err
@@ -300,6 +324,10 @@ func (s *Server) randomLane(_ http.ResponseWriter, r *http.Request) (any, error)
 
 // --- building lanes from providers -------------------------------------------
 
+// maxKeysPerLane bounds the keys sent per lane, keeping the engine config small
+// for server pools with thousands of lanes.
+const maxKeysPerLane = 3
+
 // laneSpecs returns the engine's lane definitions, including the keys each
 // lane may use.
 func (s *Server) laneSpecs(ctx context.Context) ([]protocol.LaneSpec, error) {
@@ -327,11 +355,11 @@ func (s *Server) laneSpecs(ctx context.Context) ([]protocol.LaneSpec, error) {
 			for _, d := range surfshark.DNS {
 				spec.DNS = append(spec.DNS, d.String())
 			}
-			// Spread lanes across keys: lane i starts with key i mod n. Order
-			// changes when keys are added; the engine keeps lanes on their
-			// current key unless it was removed.
+			// Spread lanes across keys: lane i starts with key i mod n and may
+			// fall back to the next two. Order changes when keys are added; the
+			// engine keeps lanes on their current key unless it was removed.
 			if n := len(keys); n > 0 {
-				for k := 0; k < n; k++ {
+				for k := 0; k < min(n, maxKeysPerLane); k++ {
 					spec.Keys = append(spec.Keys, keys[(i+k)%n])
 				}
 			}
@@ -364,7 +392,7 @@ func (s *Server) syncLanes(ctx context.Context) error {
 	// Surfshark lanes only exist once there is a key to connect with. If the
 	// server list can't be fetched, the current Surfshark lanes are kept as they
 	// are and the other providers still sync.
-	var selected []surfshark.Server
+	var selected []surfshark.PoolServer
 	syncSurfshark := true
 	var fetchErr error
 	if sel.Lanes > 0 && keys > 0 {
@@ -372,10 +400,19 @@ func (s *Server) syncLanes(ctx context.Context) error {
 		if err != nil && len(servers) == 0 {
 			syncSurfshark, fetchErr = false, err
 		}
-		selected = surfshark.Select(servers, surfshark.Filter{
+		limit := sel.Lanes
+		if sel.AllServers {
+			limit = len(servers)
+		}
+		locations := surfshark.Select(servers, surfshark.Filter{
 			Locations: sel.Locations, ExcludeLocations: sel.ExcludeLocations, Countries: sel.Countries,
 			ExcludeCountries: sel.ExcludeCountries, IncludeVirtual: sel.IncludeVirtual,
-		}, sel.Lanes)
+		}, limit)
+		var ips map[string][]netip.Addr
+		if sel.AllServers {
+			ips = s.poolIPs(ctx, locations)
+		}
+		selected = surfshark.Pool(locations, ips)
 	}
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -387,14 +424,23 @@ func (s *Server) syncLanes(ctx context.Context) error {
 			return err
 		}
 	}
-	for i, srv := range selected {
+	if len(selected) > 0 {
+		n := len(selected)
+		ids, names, countries, codes, cities := make([]string, n), make([]string, n), make([]string, n), make([]string, n), make([]string, n)
+		virtual, endpoints, peers, positions := make([]bool, n), make([]string, n), make([]string, n), make([]int32, n)
+		for i, srv := range selected {
+			ids[i], names[i], countries[i] = "surfshark:"+srv.ID(), srv.ID(), srv.Country
+			codes[i], cities[i], virtual[i] = strings.ToUpper(srv.CountryCode), srv.Location, srv.Virtual()
+			endpoints[i], peers[i], positions[i] = srv.Endpoint(), srv.PubKey, int32(i)
+		}
 		_, err := tx.Exec(ctx, `INSERT INTO lanes (id, provider, name, country, country_code, city, virtual, endpoint, peer_key, position, active)
-			VALUES ($1, 'surfshark', $2, $3, $4, $5, $6, $7, $8, $9, true)
+			SELECT id, 'surfshark', name, country, cc, city, virtual, endpoint, peer, pos, true
+			FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::bool[], $7::text[], $8::text[], $9::int[])
+				AS t(id, name, country, cc, city, virtual, endpoint, peer, pos)
 			ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, country = EXCLUDED.country, country_code = EXCLUDED.country_code,
 				city = EXCLUDED.city, virtual = EXCLUDED.virtual, endpoint = EXCLUDED.endpoint, peer_key = EXCLUDED.peer_key,
 				position = EXCLUDED.position, active = true, updated_at = now()`,
-			"surfshark:"+srv.ID(), srv.ID(), srv.Country, strings.ToUpper(srv.CountryCode), srv.Location, srv.Virtual(),
-			srv.Endpoint(), srv.PubKey, i)
+			ids, names, countries, codes, cities, virtual, endpoints, peers, positions)
 		if err != nil {
 			return err
 		}
@@ -450,4 +496,43 @@ func (s *Server) surfsharkServers(ctx context.Context, force bool) ([]surfshark.
 	}
 	s.servers, s.serversAt, s.serversErr = servers, time.Now(), ""
 	return servers, nil
+}
+
+// poolIPs returns the known server IPs of the locations, looking them up when
+// the cache is older than six hours. Results are merged with earlier lookups,
+// since DNS only shows a few servers of a location at a time.
+func (s *Server) poolIPs(ctx context.Context, locations []surfshark.Server) map[string][]netip.Addr {
+	s.serverIPsMu.Lock()
+	defer s.serverIPsMu.Unlock()
+	hosts := make([]string, 0, len(locations))
+	missing := false
+	for _, l := range locations {
+		hosts = append(hosts, l.ConnectionName)
+		if _, ok := s.serverIPs[l.ConnectionName]; !ok {
+			missing = true
+		}
+	}
+	if !missing && time.Since(s.serverIPsAt) < 6*time.Hour {
+		return s.serverIPs
+	}
+	found := surfshark.DiscoverIPs(ctx, hosts, 12, s.lookup)
+	merged := make(map[string][]netip.Addr, len(found))
+	total := 0
+	for _, h := range hosts {
+		set := map[netip.Addr]bool{}
+		for _, a := range s.serverIPs[h] {
+			set[a] = true
+		}
+		for _, a := range found[h] {
+			set[a] = true
+		}
+		for a := range set {
+			merged[h] = append(merged[h], a)
+		}
+		slices.SortFunc(merged[h], func(a, b netip.Addr) int { return a.Compare(b) })
+		total += len(merged[h])
+	}
+	s.serverIPs, s.serverIPsAt = merged, time.Now()
+	s.log.Info("discovered Surfshark servers", "locations", len(hosts), "servers", total)
+	return merged
 }

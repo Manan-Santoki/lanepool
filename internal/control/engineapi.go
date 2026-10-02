@@ -85,6 +85,13 @@ func (s *Server) buildEngineConfig(ctx context.Context) (protocol.EngineConfig, 
 		return cfg, err
 	}
 	cfg.Settings = settings
+	sel, err := s.selection(ctx)
+	if err != nil {
+		return cfg, err
+	}
+	if sel.AllServers {
+		cfg.Settings.TargetUp = max(sel.Lanes, 1)
+	}
 	if cfg.Lanes, err = s.laneSpecs(ctx); err != nil {
 		return cfg, err
 	}

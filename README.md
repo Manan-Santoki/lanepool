@@ -25,6 +25,9 @@ your apps ─► lanepool proxy ──┼─► lane de-fra ─► 185.x.x.x    
   later with the next key. Repeated failures pause new connections. Working lanes
   are never restarted on configuration changes. (VPN providers block IPs that
   open many sessions at once.)
+- **Server pool:** optionally every Surfshark server becomes a candidate lane
+  (each location has many server IPs, found through DNS). lanepool keeps a set
+  number connected and, when a server doesn't connect, moves on to the next one.
 - **Proxy users** with:
   - allowed countries and lanes
   - sticky sessions

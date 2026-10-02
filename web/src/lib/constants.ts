@@ -41,7 +41,7 @@ const TONES = {
 export type ToneName = keyof typeof TONES
 export const tone = (name: ToneName): Tone => TONES[name]
 
-export const LANE_STATUSES: LaneStatus[] = ["up", "connecting", "queued", "backoff", "down", "disabled"]
+export const LANE_STATUSES: LaneStatus[] = ["up", "connecting", "queued", "backoff", "down", "disabled", "standby"]
 
 export const LANE_STATUS_META: Record<LaneStatus, { label: string; tone: ToneName; description: string }> = {
   up: { label: "Up", tone: "green", description: "Tunnel is healthy and serving traffic" },
@@ -50,6 +50,7 @@ export const LANE_STATUS_META: Record<LaneStatus, { label: string; tone: ToneNam
   backoff: { label: "Backoff", tone: "amber", description: "Failed recently; waiting before the next retry" },
   down: { label: "Down", tone: "red", description: "Tunnel is not working" },
   disabled: { label: "Disabled", tone: "gray", description: "Turned off by an admin" },
+  standby: { label: "Standby", tone: "gray", description: "Server pool: not needed while enough lanes are up" },
 }
 
 export const CONN_RESULTS: ConnResult[] = [
@@ -85,7 +86,11 @@ export const EVENT_LEVEL_TONE: Record<"info" | "warn" | "error", ToneName> = {
 }
 
 export const STRATEGIES: { value: Strategy; label: string; description: string }[] = [
-  { value: "round_robin", label: "Round robin", description: "Cycle through healthy lanes in order. Even spread, predictable." },
+  {
+    value: "round_robin",
+    label: "Round robin",
+    description: "Cycle through healthy lanes in order. Even spread, predictable.",
+  },
   { value: "random", label: "Random", description: "Pick a random healthy lane for each new connection." },
   {
     value: "least_connections",

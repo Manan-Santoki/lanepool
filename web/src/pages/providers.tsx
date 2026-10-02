@@ -444,10 +444,14 @@ function SelectionForm({ selection, canWrite }: { selection: SurfsharkSelection;
       <FormError message={general} />
       <fieldset disabled={!canWrite} className="grid gap-4 md:grid-cols-2">
         <FormField
-          label="Number of lanes"
+          label={form.allServers ? "Lanes to keep connected" : "Number of lanes"}
           htmlFor="s-lanes"
           error={lanesError ?? server.lanes}
-          description="Total Surfshark lanes. Pinned locations always run, even beyond this number."
+          description={
+            form.allServers
+              ? "How many servers of the pool are connected at any time."
+              : "Total Surfshark lanes. Pinned locations always run, even beyond this number."
+          }
         >
           <Input
             id="s-lanes"
@@ -459,6 +463,24 @@ function SelectionForm({ selection, canWrite }: { selection: SurfsharkSelection;
             className="tabular max-w-32"
           />
         </FormField>
+        <label
+          htmlFor="s-all-servers"
+          className="flex items-start justify-between gap-4 rounded-md border p-3 md:col-span-2"
+        >
+          <span className="space-y-1">
+            <span className="block text-sm font-medium">Use every server (server pool)</span>
+            <span className="block text-xs text-muted-foreground">
+              Each location has many servers with their own IPs. With this on, every server of the matching locations is
+              a candidate and lanepool keeps the number of lanes above connected: when a server doesn’t connect, it
+              moves on to the next one instead of waiting.
+            </span>
+          </span>
+          <Switch
+            id="s-all-servers"
+            checked={form.allServers}
+            onCheckedChange={(allServers) => setForm((f) => ({ ...f, allServers }))}
+          />
+        </label>
         <label
           htmlFor="s-virtual"
           className="flex items-start justify-between gap-4 rounded-md border p-3 md:self-start"

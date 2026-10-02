@@ -302,3 +302,63 @@ func TestBreakerProbesWithOneLaneAfterPause(t *testing.T) {
 		}
 	}
 }
+
+func TestPoolKeepsTargetUpAndSkipsFailingServers(t *testing.T) {
+	s := testSettings()
+	s.TargetUp = 2
+	s.MaxConnecting = 2
+	s.ConnectTimeout = 1
+	s.RetryBackoff = 60
+	s.RetryBackoffMax = 60
+
+	priv, pub := wgtest.KeyPair()
+	var specs []protocol.LaneSpec
+	// Two dead servers first, then three that work.
+	for i := 0; i < 2; i++ {
+		_, otherPub := wgtest.KeyPair()
+		specs = append(specs, laneFor(fmt.Sprintf("dead%d", i), wgtest.Start(t, "203.0.113.9", otherPub), priv))
+	}
+	for i := 0; i < 3; i++ {
+		specs = append(specs, laneFor(fmt.Sprintf("ok%d", i), wgtest.Start(t, fmt.Sprintf("203.0.113.%d", 20+i), pub), priv))
+	}
+	m := New(s, nil)
+	m.Apply(s, specs)
+	run(t, m)
+
+	count := func() (up, connecting, backoff int) {
+		for _, st := range m.States() {
+			switch st.Status {
+			case protocol.LaneUp:
+				up++
+			case protocol.LaneConnecting:
+				connecting++
+			case protocol.LaneBackoff:
+				backoff++
+			}
+		}
+		return
+	}
+	waitFor(t, 10*time.Second, "two lanes up after skipping the dead servers", func() bool {
+		up, connecting, _ := count()
+		if up+connecting > 2 {
+			t.Fatalf("%d lanes up or connecting; target is 2", up+connecting)
+		}
+		return up == 2
+	})
+	time.Sleep(500 * time.Millisecond)
+	up, _, backoff := count()
+	if up != 2 || backoff != 2 {
+		t.Fatalf("up=%d backoff=%d, want 2 and 2: %+v", up, backoff, m.States())
+	}
+	if len(m.States()) != 5 {
+		// ok2 never started: it is standby and not reported.
+		if st := state(m, "ok2"); st.Status != "" {
+			t.Fatalf("standby lane reported: %+v", st)
+		}
+	}
+
+	// Lowering the target closes the surplus lane.
+	s.TargetUp = 1
+	m.Apply(s, specs)
+	waitFor(t, 3*time.Second, "pool trimmed to one lane", func() bool { up, _, _ := count(); return up == 1 })
+}

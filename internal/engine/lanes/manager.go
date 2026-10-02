@@ -10,6 +10,10 @@
 //   - stops opening new sessions for BreakerPause after BreakerFailures failures in a row,
 //     then probes with a single lane; each failed probe doubles the pause (up to 4×),
 //   - never restarts a working lane unless its configuration changed or an admin asks.
+//
+// With TargetUp set, the lanes are a pool of candidate servers: the manager keeps
+// TargetUp of them up and leaves the rest on standby. When a lane fails, it backs
+// off and the next untried candidate starts in its place.
 package lanes
 
 import (
@@ -247,8 +251,31 @@ func (m *Manager) Tick(ctx context.Context) {
 			m.park(l, now)
 		}
 	}
+	m.trimPool()
 	m.launch(ctx, now)
 	m.scheduleIPChecks(ctx, now)
+}
+
+// trimPool closes lanes beyond TargetUp (after the target was lowered), last in
+// order first. Caller holds m.mu.
+func (m *Manager) trimPool() {
+	target := m.settings.TargetUp
+	if target <= 0 {
+		return
+	}
+	active := 0
+	for _, id := range m.order {
+		l := m.lanes[id]
+		if l.status != protocol.LaneUp && l.status != protocol.LaneConnecting {
+			continue
+		}
+		active++
+		if active > target {
+			m.stop(l)
+			l.status = protocol.LaneQueued
+			l.nextStart = time.Time{}
+		}
+	}
 }
 
 func maxTime(a, b time.Time) time.Time {
@@ -275,20 +302,24 @@ func (m *Manager) launch(ctx context.Context, now time.Time) {
 	if m.trips > 0 {
 		limit = 1 // half-open breaker: probe with one lane until something connects
 	}
-	connecting := 0
+	connecting, up := 0, 0
 	var due []*lane
 	for _, id := range m.order {
 		l := m.lanes[id]
-		if l.status == protocol.LaneConnecting {
+		switch l.status {
+		case protocol.LaneConnecting:
 			connecting++
+		case protocol.LaneUp:
+			up++
 		}
 		if l.tun == nil && l.status != protocol.LaneDisabled && l.status != protocol.LaneConnecting && !now.Before(l.nextStart) && len(l.spec.Keys) > 0 {
 			due = append(due, l)
 		}
 	}
+	// Never-tried lanes (zero nextStart) come first, then those whose retry is due.
 	sort.SliceStable(due, func(i, j int) bool { return due[i].nextStart.Before(due[j].nextStart) })
 	for _, l := range due {
-		if connecting >= limit {
+		if connecting >= limit || (s.TargetUp > 0 && up+connecting >= s.TargetUp) {
 			return
 		}
 		m.startLane(ctx, l, now)
@@ -520,6 +551,9 @@ func (m *Manager) States() []protocol.LaneState {
 	paused := m.now().Before(m.pausedUntil)
 	for _, id := range m.order {
 		l := m.lanes[id]
+		if m.settings.TargetUp > 0 && l.status == protocol.LaneQueued && l.restarts == 0 && l.lastError == "" {
+			continue // untried pool candidate: control shows it as standby
+		}
 		st := protocol.LaneState{
 			ID: id, Status: l.status, KeyID: l.keyID(), ExitIP: l.exitIP,
 			LatencyMs: int(l.latency / time.Millisecond), ActiveConnections: int(l.active.Load()),

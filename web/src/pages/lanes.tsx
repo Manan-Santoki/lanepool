@@ -49,7 +49,12 @@ const STATUS_ORDER: Record<LaneStatus, number> = {
   queued: 3,
   up: 4,
   disabled: 5,
+  standby: 6,
 }
+
+/** "active" hides standby servers of a pool; any other value is an exact status. */
+const statusFilter: FilterFn<Lane> = (row, _columnId, value: string) =>
+  value === "active" ? row.original.status !== "standby" : row.original.status === value
 
 const laneSearch: FilterFn<Lane> = (row, _columnId, filterValue: string) => {
   const q = filterValue.trim().toLowerCase()
@@ -120,7 +125,8 @@ export function LanesPage() {
   const live = useStreamLive()
   const canWrite = useCanWrite()
   const restartAll = useRestartAllLanes()
-  const [status, setStatus] = useState<string>("all")
+  const [status, setStatus] = useState<string>("active")
+  const standbyCount = useMemo(() => (lanes.data ?? []).filter((l) => l.status === "standby").length, [lanes.data])
   const [country, setCountry] = useState<string>("all")
   const [search, setSearch] = useState("")
 
@@ -143,7 +149,7 @@ export function LanesPage() {
         id: "status",
         accessorKey: "status",
         header: "Status",
-        filterFn: "equalsString",
+        filterFn: statusFilter,
         sortingFn: (a, b) => STATUS_ORDER[a.original.status] - STATUS_ORDER[b.original.status],
         cell: ({ row }) => <LaneStatusBadge status={row.original.status} />,
       },
@@ -276,7 +282,7 @@ export function LanesPage() {
     return cols
   }, [canWrite])
 
-  const filtered = status !== "all" || country !== "all" || search.trim() !== ""
+  const filtered = (status !== "all" && status !== "active") || country !== "all" || search.trim() !== ""
 
   return (
     <>
@@ -345,7 +351,8 @@ export function LanesPage() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All statuses</SelectItem>
+                <SelectItem value="active">{standbyCount ? "Active (hide standby)" : "All statuses"}</SelectItem>
+                {standbyCount ? <SelectItem value="all">All, incl. standby</SelectItem> : null}
                 {LANE_STATUSES.map((s) => (
                   <SelectItem key={s} value={s}>
                     {LANE_STATUS_META[s].label}
@@ -372,7 +379,7 @@ export function LanesPage() {
               variant="ghost"
               size="sm"
               onClick={() => {
-                setStatus("all")
+                setStatus("active")
                 setCountry("all")
                 setSearch("")
               }}
@@ -381,7 +388,11 @@ export function LanesPage() {
             </Button>
           ) : null}
           <span className="tabular text-xs text-muted-foreground sm:ml-auto">
-            {lanes.data ? `${formatNumber(lanes.data.length)} lanes` : null}
+            {lanes.data
+              ? standbyCount
+                ? `${formatNumber(lanes.data.length - standbyCount)} active · ${formatNumber(standbyCount)} standby`
+                : `${formatNumber(lanes.data.length)} lanes`
+              : null}
           </span>
         </div>
         {lanes.isError && !lanes.data ? (
@@ -396,6 +407,7 @@ export function LanesPage() {
             globalFilterFn={laneSearch}
             columnFilters={columnFilters}
             initialSorting={[{ id: "status", desc: false }]}
+            rowLimit={200}
             rowClassName={(row) => (row.original.enabled ? undefined : "opacity-60")}
             empty={
               filtered ? (

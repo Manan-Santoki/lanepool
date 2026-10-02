@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -57,6 +58,10 @@ type Server struct {
 	serversAt    time.Time
 	serversErr   string
 	serversMu    sync.Mutex
+	serverIPs    map[string][]netip.Addr // server IPs per location host name (pool mode)
+	serverIPsAt  time.Time
+	serverIPsMu  sync.Mutex
+	lookup       surfshark.LookupFunc // nil: public DNS resolvers
 	syncRequired chan struct{}
 
 	accounts      surfsharkAccounts

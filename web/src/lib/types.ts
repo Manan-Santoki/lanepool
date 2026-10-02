@@ -3,7 +3,7 @@
 export type Role = "admin" | "viewer";
 export interface Admin { id: number; email: string; name: string; role: Role; disabled: boolean; createdAt: string; lastLoginAt?: string }
 
-export type LaneStatus = "queued" | "connecting" | "up" | "down" | "backoff" | "disabled";
+export type LaneStatus = "queued" | "connecting" | "up" | "down" | "backoff" | "disabled" | "standby";
 export interface Lane {
   id: string;              // "surfshark:us-nyc" | "wireguard:12"
   name: string;            // "us-nyc"
@@ -78,7 +78,7 @@ export interface SurfsharkAccount {
   connected: boolean; email: string; autoManage: boolean; lanesPerKey: number; rotateFailures: number;
   lastError?: string; lastSyncAt?: string | null; remoteKeys?: SurfsharkRemoteKey[]
 }
-export interface SurfsharkSelection { lanes: number; countries: string[]; excludeCountries: string[]; locations: string[]; excludeLocations: string[]; includeVirtual: boolean }
+export interface SurfsharkSelection { lanes: number; countries: string[]; excludeCountries: string[]; locations: string[]; excludeLocations: string[]; includeVirtual: boolean; allServers: boolean }
 export interface SurfsharkProvider { keys: SurfsharkKey[]; selection: SurfsharkSelection; serverCount: number; lastFetchedAt?: string; fetchError?: string }
 export interface SurfsharkLocation { id: string; country: string; countryCode: string; city: string; virtual: boolean; load: number }
 export interface WireguardConfig { id: number; name: string; countryCode: string; city: string; endpoint: string; enabled: boolean; createdAt: string }
@@ -117,7 +117,8 @@ export type AppEvent = Event;
 // Request/response envelopes from the endpoint tables in docs/api.md.
 export interface SetupStatus { needsSetup: boolean }
 export interface AdminEnvelope { admin: Admin }
-export interface StreamState { lanes: Lane[]; gateway: GatewayState; engine: EngineStatus; activeConnections: number }
+/** `partial`: standby lanes are left out; lanes missing from `lanes` are on standby. */
+export interface StreamState { lanes: Lane[]; gateway: GatewayState; engine: EngineStatus; activeConnections: number; partial?: boolean }
 export interface CreateUserResponse { user: ProxyUser; password?: string }
 export interface PasswordResponse { password: string }
 export interface KickResponse { kicked: number }

@@ -36,6 +36,9 @@ type SurfsharkSelection struct {
 	Locations        []string `json:"locations"`        // pinned: always lanes
 	ExcludeLocations []string `json:"excludeLocations"` // removed: never picked automatically
 	IncludeVirtual   bool     `json:"includeVirtual"`
+	// AllServers makes every server of the matching locations a candidate lane
+	// (each location has many server IPs) and keeps Lanes of them connected.
+	AllServers bool `json:"allServers"`
 }
 
 func defaultSelection() SurfsharkSelection {

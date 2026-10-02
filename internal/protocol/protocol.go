@@ -17,6 +17,7 @@ const (
 	LaneDown       = "down"       // was up, handshakes stopped
 	LaneBackoff    = "backoff"    // failed to connect; retrying later with the next key
 	LaneDisabled   = "disabled"
+	LaneStandby    = "standby" // pool mode: not needed while enough lanes are up
 )
 
 // Lane selection strategies.
@@ -68,6 +69,9 @@ type EngineSettings struct {
 	IdleTimeout      int    `json:"idleTimeout"`
 	AutoBurnFailures int    `json:"autoBurnFailures"` // 0 disables automatic burned-IP detection
 	AutoBurnTTL      int    `json:"autoBurnTtl"`
+	// TargetUp > 0 turns the lanes into a pool: the engine keeps this many up and
+	// leaves the rest on standby, starting another one whenever a lane fails.
+	TargetUp int `json:"targetUp,omitempty"`
 }
 
 // DefaultSettings are the defaults; pacing matches what v1 learned in production.

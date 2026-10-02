@@ -6,7 +6,8 @@ import type { Lane } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 /** One small coloured square per lane, with name/status/exit IP on hover. */
-export function LaneGrid({ lanes }: { lanes: Lane[] }) {
+export function LaneGrid({ lanes: all }: { lanes: Lane[] }) {
+  const lanes = all.filter((l) => l.status !== "standby")
   return (
     <div className="flex flex-wrap gap-1" role="list" aria-label="Lane status grid">
       {lanes.map((lane) => {
@@ -39,7 +40,8 @@ export function LaneGrid({ lanes }: { lanes: Lane[] }) {
   )
 }
 
-export function LaneGridLegend({ lanes }: { lanes: Lane[] }) {
+export function LaneGridLegend({ lanes: all }: { lanes: Lane[] }) {
+  const lanes = all.filter((l) => l.status !== "standby")
   const counts = new Map<string, number>()
   for (const l of lanes) counts.set(l.status, (counts.get(l.status) ?? 0) + 1)
   return (

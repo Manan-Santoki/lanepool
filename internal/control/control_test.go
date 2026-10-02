@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"os"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/Manan-Santoki/lanepool/internal/engine"
+	"github.com/Manan-Santoki/lanepool/internal/protocol"
 	"github.com/Manan-Santoki/lanepool/internal/providers/surfshark"
 	"github.com/Manan-Santoki/lanepool/internal/wg/wgtest"
 )
@@ -467,5 +469,54 @@ func TestParseWGQuick(t *testing.T) {
 	}
 	if _, err := parseWGQuick("[Interface]\nPrivateKey = x\n"); err == nil {
 		t.Fatal("accepted a broken config")
+	}
+}
+
+func TestSurfsharkServerPool(t *testing.T) {
+	servers := []surfshark.Server{
+		{Country: "US", CountryCode: "US", Location: "New York", ConnectionName: "us-nyc.prod.surfshark.com", PubKey: "yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk="},
+		{Country: "DE", CountryCode: "DE", Location: "Berlin", ConnectionName: "de-ber.prod.surfshark.com", PubKey: "yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk="},
+	}
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { json.NewEncoder(w).Encode(servers) }))
+	defer fake.Close()
+	st := newStack(t, fake.URL)
+	st.srv.lookup = func(_ context.Context, host string) ([]netip.Addr, error) {
+		if host == "us-nyc.prod.surfshark.com" {
+			return []netip.Addr{netip.MustParseAddr("192.0.2.1"), netip.MustParseAddr("192.0.2.2")}, nil
+		}
+		return []netip.Addr{netip.MustParseAddr("198.51.100.1")}, nil
+	}
+	st.call(st.client, "POST", "/api/setup", map[string]string{"email": "o@example.com", "password": "a-long-password"}, nil)
+	for i := 0; i < 5; i++ {
+		k, _ := wgtest.KeyPair()
+		st.call(st.client, "POST", "/api/providers/surfshark/keys", map[string]string{"privateKey": k}, nil)
+	}
+	if code := st.call(st.client, "PUT", "/api/providers/surfshark/selection",
+		map[string]any{"lanes": 2, "allServers": true, "includeVirtual": true}, nil); code != 200 {
+		t.Fatalf("selection: %d", code)
+	}
+	var lanes []Lane
+	st.call(st.client, "GET", "/api/lanes", nil, &lanes)
+	// Every server is a lane, interleaved across locations; none is reported yet: standby.
+	if ids := laneIDs(lanes); ids != "surfshark:de-ber@198.51.100.1,surfshark:us-nyc@192.0.2.1,surfshark:us-nyc@192.0.2.2" {
+		t.Fatalf("pool lanes: %s", ids)
+	}
+	if lanes[0].Status != protocol.LaneStandby {
+		t.Fatalf("status %q, want standby", lanes[0].Status)
+	}
+	cfg, err := st.srv.buildEngineConfig(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Settings.TargetUp != 2 || len(cfg.Lanes) != 3 || cfg.Lanes[1].Endpoint != "192.0.2.1:51820" || len(cfg.Lanes[0].Keys) != maxKeysPerLane {
+		t.Fatalf("engine config: target %d, %+v", cfg.Settings.TargetUp, cfg.Lanes)
+	}
+	// Removing one server switches it off; its location stays in the pool.
+	if code := st.call(st.client, "DELETE", "/api/lanes/"+url.PathEscape("surfshark:us-nyc@192.0.2.2"), nil, nil); code != 204 {
+		t.Fatalf("remove server: %d", code)
+	}
+	st.call(st.client, "GET", "/api/lanes", nil, &lanes)
+	if len(lanes) != 3 || lanes[2].Enabled {
+		t.Fatalf("after remove: %+v", lanes)
 	}
 }

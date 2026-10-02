@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react"
+import { Button } from "@/components/ui/button"
 import {
   flexRender,
   getCoreRowModel,
@@ -39,6 +40,8 @@ export interface DataTableProps<T> {
   className?: string
   /** Skeleton rows while loading. */
   skeletonRows?: number
+  /** Render at most this many rows, with a button to show more (large lists). */
+  rowLimit?: number
 }
 
 export function DataTable<T>({
@@ -54,8 +57,10 @@ export function DataTable<T>({
   rowClassName,
   className,
   skeletonRows = 6,
+  rowLimit,
 }: DataTableProps<T>) {
   const [sorting, setSorting] = useState<SortingState>(initialSorting)
+  const [shown, setShown] = useState(rowLimit ?? Number.POSITIVE_INFINITY)
 
   // TanStack Table v8 is not React Compiler compatible; this project does not use the compiler.
   // oxlint-disable-next-line react/incompatible-library
@@ -73,100 +78,115 @@ export function DataTable<T>({
     autoResetAll: false,
   })
 
-  const rows = table.getRowModel().rows
+  const allRows = table.getRowModel().rows
+  const rows = allRows.length > shown ? allRows.slice(0, shown) : allRows
   const colCount = table.getVisibleLeafColumns().length
 
   return (
-    <Table className={cn("min-w-max", className)}>
-      <TableHeader className="bg-muted/40">
-        {table.getHeaderGroups().map((hg) => (
-          <TableRow key={hg.id} className="hover:bg-transparent">
-            {hg.headers.map((header) => {
-              const meta = header.column.columnDef.meta
-              const sorted = header.column.getIsSorted()
-              const canSort = header.column.getCanSort()
-              const content = header.isPlaceholder
-                ? null
-                : flexRender(header.column.columnDef.header, header.getContext())
-              return (
-                <TableHead
-                  key={header.id}
-                  aria-sort={sorted === "asc" ? "ascending" : sorted === "desc" ? "descending" : undefined}
-                  className={cn(
-                    "h-10 text-xs font-medium text-muted-foreground",
-                    meta?.align === "right" && "text-right",
-                    meta?.align === "center" && "text-center",
-                    meta?.className,
-                  )}
-                >
-                  {canSort ? (
-                    <button
-                      type="button"
-                      onClick={header.column.getToggleSortingHandler()}
-                      className={cn(
-                        "-mx-1 inline-flex items-center gap-1 rounded px-1 py-0.5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
-                        meta?.align === "right" && "flex-row-reverse",
-                        sorted && "text-foreground",
-                      )}
-                    >
-                      {content}
-                      {sorted === "asc" ? (
-                        <ArrowUpIcon className="size-3" />
-                      ) : sorted === "desc" ? (
-                        <ArrowDownIcon className="size-3" />
-                      ) : (
-                        <ArrowUpDownIcon className="size-3 opacity-40" />
-                      )}
-                    </button>
-                  ) : (
-                    content
-                  )}
-                </TableHead>
-              )
-            })}
-          </TableRow>
-        ))}
-      </TableHeader>
-      <TableBody>
-        {isLoading && !data ? (
-          Array.from({ length: skeletonRows }, (_, i) => (
-            <TableRow key={`sk-${i}`} className="hover:bg-transparent">
-              {Array.from({ length: colCount }, (_, j) => (
-                <TableCell key={j}>
-                  <Skeleton className="h-5 w-full min-w-12" />
-                </TableCell>
-              ))}
-            </TableRow>
-          ))
-        ) : rows.length === 0 ? (
-          <TableRow className="hover:bg-transparent">
-            <TableCell colSpan={colCount} className="p-0">
-              <div className="sticky left-0 w-[min(100%,100vw)] max-w-[calc(100vw-2rem)]">{empty ?? <p className="p-8 text-center text-sm text-muted-foreground">No results.</p>}</div>
-            </TableCell>
-          </TableRow>
-        ) : (
-          rows.map((row) => (
-            <TableRow key={row.id} className={rowClassName?.(row)}>
-              {row.getVisibleCells().map((cell) => {
-                const meta = cell.column.columnDef.meta
+    <>
+      <Table className={cn("min-w-max", className)}>
+        <TableHeader className="bg-muted/40">
+          {table.getHeaderGroups().map((hg) => (
+            <TableRow key={hg.id} className="hover:bg-transparent">
+              {hg.headers.map((header) => {
+                const meta = header.column.columnDef.meta
+                const sorted = header.column.getIsSorted()
+                const canSort = header.column.getCanSort()
+                const content = header.isPlaceholder
+                  ? null
+                  : flexRender(header.column.columnDef.header, header.getContext())
                 return (
-                  <TableCell
-                    key={cell.id}
+                  <TableHead
+                    key={header.id}
+                    aria-sort={sorted === "asc" ? "ascending" : sorted === "desc" ? "descending" : undefined}
                     className={cn(
-                      "py-2",
-                      meta?.align === "right" && "tabular text-right",
+                      "h-10 text-xs font-medium text-muted-foreground",
+                      meta?.align === "right" && "text-right",
                       meta?.align === "center" && "text-center",
                       meta?.className,
                     )}
                   >
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </TableCell>
+                    {canSort ? (
+                      <button
+                        type="button"
+                        onClick={header.column.getToggleSortingHandler()}
+                        className={cn(
+                          "-mx-1 inline-flex items-center gap-1 rounded px-1 py-0.5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
+                          meta?.align === "right" && "flex-row-reverse",
+                          sorted && "text-foreground",
+                        )}
+                      >
+                        {content}
+                        {sorted === "asc" ? (
+                          <ArrowUpIcon className="size-3" />
+                        ) : sorted === "desc" ? (
+                          <ArrowDownIcon className="size-3" />
+                        ) : (
+                          <ArrowUpDownIcon className="size-3 opacity-40" />
+                        )}
+                      </button>
+                    ) : (
+                      content
+                    )}
+                  </TableHead>
                 )
               })}
             </TableRow>
-          ))
-        )}
-      </TableBody>
-    </Table>
+          ))}
+        </TableHeader>
+        <TableBody>
+          {isLoading && !data ? (
+            Array.from({ length: skeletonRows }, (_, i) => (
+              <TableRow key={`sk-${i}`} className="hover:bg-transparent">
+                {Array.from({ length: colCount }, (_, j) => (
+                  <TableCell key={j}>
+                    <Skeleton className="h-5 w-full min-w-12" />
+                  </TableCell>
+                ))}
+              </TableRow>
+            ))
+          ) : rows.length === 0 ? (
+            <TableRow className="hover:bg-transparent">
+              <TableCell colSpan={colCount} className="p-0">
+                <div className="sticky left-0 w-[min(100%,100vw)] max-w-[calc(100vw-2rem)]">
+                  {empty ?? <p className="p-8 text-center text-sm text-muted-foreground">No results.</p>}
+                </div>
+              </TableCell>
+            </TableRow>
+          ) : (
+            rows.map((row) => (
+              <TableRow key={row.id} className={rowClassName?.(row)}>
+                {row.getVisibleCells().map((cell) => {
+                  const meta = cell.column.columnDef.meta
+                  return (
+                    <TableCell
+                      key={cell.id}
+                      className={cn(
+                        "py-2",
+                        meta?.align === "right" && "tabular text-right",
+                        meta?.align === "center" && "text-center",
+                        meta?.className,
+                      )}
+                    >
+                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                    </TableCell>
+                  )
+                })}
+              </TableRow>
+            ))
+          )}
+        </TableBody>
+      </Table>
+      {allRows.length > rows.length && rowLimit ? (
+        <div className="flex items-center justify-center gap-3 border-t p-3 text-xs text-muted-foreground">
+          <span className="tabular">
+            Showing {rows.length.toLocaleString()} of {allRows.length.toLocaleString()}
+          </span>
+          <Button variant="outline" size="sm" onClick={() => setShown((n) => n + rowLimit)}>
+            Show {Math.min(rowLimit, allRows.length - rows.length).toLocaleString()} more
+          </Button>
+        </div>
+      ) : null}
+    </>
   )
 }

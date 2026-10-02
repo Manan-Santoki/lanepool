@@ -61,6 +61,9 @@ type streamStatePayload struct {
 	Gateway           protocol.GatewayState `json:"gateway"`
 	Engine            EngineStatus          `json:"engine"`
 	ActiveConnections int                   `json:"activeConnections"`
+	// Partial is set when standby lanes are left out (server pools are large);
+	// lanes missing from Lanes are on standby.
+	Partial bool `json:"partial,omitempty"`
 }
 
 func (h *hub) publishState(p *streamStatePayload) {
@@ -77,7 +80,16 @@ func (s *Server) streamState() *streamStatePayload {
 		return nil
 	}
 	_, gw := s.latestLaneStates()
-	return &streamStatePayload{Lanes: lanes, Gateway: gw, Engine: s.engineStatus(), ActiveConnections: gw.ActiveConnections}
+	p := &streamStatePayload{Lanes: lanes, Gateway: gw, Engine: s.engineStatus(), ActiveConnections: gw.ActiveConnections}
+	if sel, err := s.selection(ctx); err == nil && sel.AllServers {
+		p.Partial, p.Lanes = true, []Lane{}
+		for _, l := range lanes {
+			if l.Status != protocol.LaneStandby {
+				p.Lanes = append(p.Lanes, l)
+			}
+		}
+	}
+	return p
 }
 
 func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
