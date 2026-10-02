@@ -271,7 +271,7 @@ type surfsharkLocation struct {
 func (s *Server) surfsharkLocations(_ http.ResponseWriter, r *http.Request) (any, error) {
 	servers, err := s.surfsharkServers(r.Context(), false)
 	if err != nil && len(servers) == 0 {
-		return nil, errStatus(http.StatusBadGateway, err.Error())
+		return nil, errStatus(http.StatusFailedDependency, err.Error())
 	}
 	out := make([]surfsharkLocation, 0, len(servers))
 	for _, sv := range servers {

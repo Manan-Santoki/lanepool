@@ -169,7 +169,7 @@ func (s *Server) putSurfsharkAccount(w http.ResponseWriter, r *http.Request) (an
 		if errors.Is(err, surfshark.ErrAuth) {
 			return nil, errFields(map[string]string{"password": err.Error()})
 		}
-		return nil, errStatus(http.StatusBadGateway, err.Error())
+		return nil, errStatus(http.StatusFailedDependency, err.Error())
 	}
 	st, err := s.accountSettings(ctx)
 	if err != nil {
@@ -256,7 +256,7 @@ func (s *Server) generateKeys(ctx context.Context, acct *surfshark.Account, n in
 		rk, err := acct.Register(ctx, pub, label)
 		if err != nil {
 			s.noteAccountResult(ctx, err)
-			return out, errStatus(http.StatusBadGateway, err.Error())
+			return out, errStatus(http.StatusFailedDependency, err.Error())
 		}
 		k, err := s.insertKey(ctx, priv, pub, label)
 		if err != nil {
@@ -308,7 +308,7 @@ func (s *Server) deleteKeyEverywhere(ctx context.Context, acct *surfshark.Accoun
 		if remoteID != "" {
 			if err := acct.Delete(ctx, remoteID); err != nil && !strings.Contains(err.Error(), "HTTP 404") {
 				s.noteAccountResult(ctx, err)
-				return "", errStatus(http.StatusBadGateway, "deleting at Surfshark: "+err.Error())
+				return "", errStatus(http.StatusFailedDependency, "deleting at Surfshark: "+err.Error())
 			}
 		}
 	}
@@ -383,7 +383,7 @@ func (s *Server) deleteRemoteKey(_ http.ResponseWriter, r *http.Request) (any, e
 	}
 	keys, err := acct.Keys(ctx)
 	if err != nil {
-		return nil, errStatus(http.StatusBadGateway, err.Error())
+		return nil, errStatus(http.StatusFailedDependency, err.Error())
 	}
 	var pub string
 	for _, k := range keys {
@@ -395,7 +395,7 @@ func (s *Server) deleteRemoteKey(_ http.ResponseWriter, r *http.Request) (any, e
 		return nil, errNotFound
 	}
 	if err := acct.Delete(ctx, remoteID); err != nil {
-		return nil, errStatus(http.StatusBadGateway, err.Error())
+		return nil, errStatus(http.StatusFailedDependency, err.Error())
 	}
 	// A lanepool key with the same public key can't connect any more.
 	s.db.Exec(ctx, `DELETE FROM provider_keys WHERE provider = 'surfshark' AND public_key = $1`, pub)

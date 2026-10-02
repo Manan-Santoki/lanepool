@@ -72,7 +72,7 @@ func engineErr(err error) error {
 	if err == nil {
 		return nil
 	}
-	return errStatus(http.StatusBadGateway, err.Error())
+	return errStatus(http.StatusFailedDependency, err.Error())
 }
 
 // --- configuration for the engine -------------------------------------------

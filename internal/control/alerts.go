@@ -222,7 +222,7 @@ func (s *Server) testChannel(_ http.ResponseWriter, r *http.Request) (any, error
 		return nil, err
 	}
 	if err := sendAlert(r.Context(), c, "lanepool test", "This is a test alert from lanepool. Alerts are working."); err != nil {
-		return nil, errStatus(http.StatusBadGateway, "sending failed: "+err.Error())
+		return nil, errStatus(http.StatusFailedDependency, "sending failed: "+err.Error())
 	}
 	return nil, nil
 }

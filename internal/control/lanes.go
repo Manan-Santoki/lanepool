@@ -147,7 +147,7 @@ func (s *Server) addLanes(_ http.ResponseWriter, r *http.Request) (any, error) {
 	ctx := r.Context()
 	servers, err := s.surfsharkServers(ctx, false)
 	if err != nil && len(servers) == 0 {
-		return nil, errStatus(http.StatusBadGateway, err.Error())
+		return nil, errStatus(http.StatusFailedDependency, err.Error())
 	}
 	known := map[string]bool{}
 	for _, sv := range servers {
@@ -189,7 +189,7 @@ func (s *Server) addLanes(_ http.ResponseWriter, r *http.Request) (any, error) {
 	syncErr := s.syncLanes(ctx)
 	s.audit(ctx, who(r), "admin.lanes_added", "added lanes: "+strings.Join(in.Locations, ", "))
 	if syncErr != nil {
-		return nil, errStatus(http.StatusBadGateway, syncErr.Error())
+		return nil, errStatus(http.StatusFailedDependency, syncErr.Error())
 	}
 	return s.listLanesData(ctx)
 }
