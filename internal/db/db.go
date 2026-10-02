@@ -24,11 +24,16 @@ func Open(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	}
 	cfg.MaxConns = 20
 	var pool *pgxpool.Pool
+	if cfg.ConnConfig.ConnectTimeout == 0 {
+		cfg.ConnConfig.ConnectTimeout = 10 * time.Second
+	}
 	// The database may still be starting (docker compose); retry for a while.
 	for attempt := 0; ; attempt++ {
 		pool, err = pgxpool.NewWithConfig(ctx, cfg)
 		if err == nil {
-			err = pool.Ping(ctx)
+			pctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			err = pool.Ping(pctx)
+			cancel()
 		}
 		if err == nil {
 			break

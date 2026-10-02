@@ -166,7 +166,9 @@ func hostname() string {
 }
 
 func runControl(ctx context.Context, log *slog.Logger) error {
-	srv, err := control.New(ctx, controlConfig(), log)
+	cfg := controlConfig()
+	log.Info("starting control; connecting to the database", "version", version)
+	srv, err := control.New(ctx, cfg, log)
 	if err != nil {
 		return err
 	}

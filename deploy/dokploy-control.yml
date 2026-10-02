@@ -23,7 +23,11 @@ services:
       test: ["CMD-SHELL", "pg_isready -U lanepool"]
       interval: 5s
       retries: 20
-    networks: [default]
+    networks:
+      default:
+        # A unique name: control is also on dokploy-network, where a plain "db"
+        # can resolve to another project's database.
+        aliases: [lanepool-db]
 
   control:
     build:
@@ -35,7 +39,7 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     environment:
-      DATABASE_URL: postgres://lanepool:${POSTGRES_PASSWORD}@db:5432/lanepool?sslmode=disable
+      DATABASE_URL: postgres://lanepool:${POSTGRES_PASSWORD}@lanepool-db:5432/lanepool?sslmode=disable&connect_timeout=10
       ENGINE_URL: ${ENGINE_URL:-http://lanepool:9090}
       LANEPOOL_SECRET: ${LANEPOOL_SECRET:?set LANEPOOL_SECRET}
       ENGINE_TOKEN: ${ENGINE_TOKEN:?set ENGINE_TOKEN}
