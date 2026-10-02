@@ -21,14 +21,19 @@ import (
 // manage the WireGuard keys registered on an account. It isn't a documented
 // public API; the calls below are the ones open-source tools rely on.
 type Account struct {
-	BaseURL  string // default https://api.surfshark.com
-	Email    string
-	Password string
-	HTTP     *http.Client
+	BaseURL   string // default https://api.surfshark.com
+	UserAgent string // default DefaultUserAgent
+	Email     string
+	Password  string
+	HTTP      *http.Client
 
 	mu    sync.Mutex
 	token string
 }
+
+// DefaultUserAgent identifies requests like Surfshark's iOS app. Cloudflare in
+// front of the account API blocks unknown clients (HTTP 403).
+const DefaultUserAgent = "Surfshark/2.24.0 (com.surfshark.vpnclient.ios; build:1; iOS 17.0.0) Alamofire/5.4.4"
 
 // RemoteKey is a public key registered on the account.
 type RemoteKey struct {
@@ -130,7 +135,11 @@ func (a *Account) send(ctx context.Context, method, path, token string, body []b
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "lanepool")
+	ua := a.UserAgent
+	if ua == "" {
+		ua = DefaultUserAgent
+	}
+	req.Header.Set("User-Agent", ua)
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}

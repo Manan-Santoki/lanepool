@@ -83,16 +83,17 @@ func logLevel() slog.Level {
 
 func controlConfig() control.Config {
 	cfg := control.Config{
-		Listen:        env("LISTEN", ":8000"),
-		DatabaseURL:   env("DATABASE_URL", "postgres://lanepool:lanepool@localhost:5432/lanepool?sslmode=disable"),
-		Secret:        os.Getenv("LANEPOOL_SECRET"),
-		EngineURL:     env("ENGINE_URL", "http://localhost:9090"),
-		EngineToken:   os.Getenv("ENGINE_TOKEN"),
-		CookieSecure:  env("COOKIE_SECURE", "false") == "true",
-		SurfsharkAPI:  os.Getenv("SURFSHARK_API"),
-		AdminEmail:    os.Getenv("ADMIN_EMAIL"),
-		AdminPassword: os.Getenv("ADMIN_PASSWORD"),
-		Import:        v1Import(),
+		Listen:             env("LISTEN", ":8000"),
+		DatabaseURL:        env("DATABASE_URL", "postgres://lanepool:lanepool@localhost:5432/lanepool?sslmode=disable"),
+		Secret:             os.Getenv("LANEPOOL_SECRET"),
+		EngineURL:          env("ENGINE_URL", "http://localhost:9090"),
+		EngineToken:        os.Getenv("ENGINE_TOKEN"),
+		CookieSecure:       env("COOKIE_SECURE", "false") == "true",
+		SurfsharkAPI:       os.Getenv("SURFSHARK_API"),
+		SurfsharkUserAgent: os.Getenv("SURFSHARK_USER_AGENT"),
+		AdminEmail:         os.Getenv("ADMIN_EMAIL"),
+		AdminPassword:      os.Getenv("ADMIN_PASSWORD"),
+		Import:             v1Import(),
 	}
 	if dist, err := fs.Sub(web.Dist, "dist"); err == nil {
 		if _, err := fs.Stat(dist, "index.html"); err == nil {

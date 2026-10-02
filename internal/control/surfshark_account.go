@@ -63,7 +63,7 @@ func (s *Server) surfsharkAccount(ctx context.Context) (*surfshark.Account, acco
 	defer s.accounts.mu.Unlock()
 	cacheKey := st.Email + "\x00" + st.SealedPassword
 	if s.accounts.account == nil || s.accounts.key != cacheKey {
-		s.accounts.account = &surfshark.Account{BaseURL: s.cfg.SurfsharkAccountAPI, Email: st.Email, Password: string(pw)}
+		s.accounts.account = &surfshark.Account{BaseURL: s.cfg.SurfsharkAccountAPI, UserAgent: s.cfg.SurfsharkUserAgent, Email: st.Email, Password: string(pw)}
 		s.accounts.key = cacheKey
 	}
 	return s.accounts.account, st, nil
@@ -164,7 +164,7 @@ func (s *Server) putSurfsharkAccount(w http.ResponseWriter, r *http.Request) (an
 	}
 	ctx := r.Context()
 	// Check the login before storing anything.
-	test := &surfshark.Account{BaseURL: s.cfg.SurfsharkAccountAPI, Email: in.Email, Password: in.Password}
+	test := &surfshark.Account{BaseURL: s.cfg.SurfsharkAccountAPI, UserAgent: s.cfg.SurfsharkUserAgent, Email: in.Email, Password: in.Password}
 	if err := test.Login(ctx); err != nil {
 		if errors.Is(err, surfshark.ErrAuth) {
 			return nil, errFields(map[string]string{"password": err.Error()})

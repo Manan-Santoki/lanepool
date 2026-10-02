@@ -30,7 +30,9 @@ type Config struct {
 	SurfsharkAPI string // override for tests
 	// SurfsharkAccountAPI is the base URL of Surfshark's account API (tests).
 	SurfsharkAccountAPI string
-	Web                 fs.FS // built dashboard (web/dist); nil serves a placeholder
+	// SurfsharkUserAgent overrides the client name sent to Surfshark's account API.
+	SurfsharkUserAgent string
+	Web                fs.FS // built dashboard (web/dist); nil serves a placeholder
 
 	// First-boot bootstrap (only used while the database is empty).
 	AdminEmail    string
