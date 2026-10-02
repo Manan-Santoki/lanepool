@@ -1,6 +1,15 @@
 import { useMemo, useState, type FormEvent } from "react"
 import type { ColumnDef } from "@tanstack/react-table"
-import { AlertTriangleIcon, KeyRoundIcon, PlusIcon, ServerIcon, ShieldIcon, Trash2Icon } from "lucide-react"
+import {
+  AlertTriangleIcon,
+  KeyRoundIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  ServerIcon,
+  ShieldIcon,
+  Trash2Icon,
+} from "lucide-react"
+import { Badge } from "@/components/ui/badge"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -26,6 +35,7 @@ import { DataTable } from "@/components/data-table"
 import { FormError, FormField } from "@/components/form-field"
 import { MultiSelect, type MultiSelectOption } from "@/components/multi-select"
 import { PageHeader } from "@/components/page-header"
+import { SurfsharkAccountCard } from "@/components/surfshark-account"
 import { EmptyState, ErrorState } from "@/components/states"
 import { RelativeTime } from "@/components/time"
 import { WriteOnly } from "@/components/write-only"
@@ -35,8 +45,10 @@ import {
   useAddWireguard,
   useDeleteSurfsharkKey,
   useDeleteWireguard,
+  useRotateSurfsharkKey,
   useSaveSurfsharkSelection,
   useSurfshark,
+  useSurfsharkAccount,
   useSurfsharkLocations,
   useUpdateSurfsharkKey,
   useUpdateWireguard,
@@ -55,6 +67,7 @@ export function ProvidersPage() {
         title="Providers"
         description="Where lanes come from. Each Surfshark location or WireGuard config becomes one lane."
       />
+      <SurfsharkAccountCard />
       <SurfsharkCard />
       <WireguardCard />
     </>
@@ -68,12 +81,28 @@ function SurfsharkCard() {
   const canWrite = useCanWrite()
   const updateKey = useUpdateSurfsharkKey()
   const deleteKey = useDeleteSurfsharkKey()
+  const rotateKey = useRotateSurfsharkKey()
+  const connected = useSurfsharkAccount().data?.connected ?? false
   const [addOpen, setAddOpen] = useState(false)
   const p = provider.data
 
   const keyColumns = useMemo<ColumnDef<SurfsharkKey>[]>(() => {
     const cols: ColumnDef<SurfsharkKey>[] = [
-      { id: "label", accessorKey: "label", header: "Label", cell: ({ row }) => <span className="font-medium">{row.original.label || "–"}</span> },
+      {
+        id: "label",
+        accessorKey: "label",
+        header: "Label",
+        cell: ({ row }) => (
+          <span className="inline-flex items-center gap-1.5">
+            <span className="font-medium">{row.original.label || "–"}</span>
+            {row.original.managed ? (
+              <Badge variant="secondary" title="Created by lanepool through your Surfshark account">
+                managed
+              </Badge>
+            ) : null}
+          </span>
+        ),
+      },
       {
         id: "publicKey",
         accessorKey: "publicKey",
@@ -101,51 +130,97 @@ function SurfsharkCard() {
           />
         ),
       },
-      { id: "lanes", accessorKey: "lanes", header: "Lanes", meta: { align: "right" }, cell: ({ row }) => formatNumber(row.original.lanes) },
+      {
+        id: "lanes",
+        accessorKey: "lanes",
+        header: "Lanes",
+        meta: { align: "right" },
+        cell: ({ row }) => formatNumber(row.original.lanes),
+      },
       {
         id: "upLanes",
         accessorKey: "upLanes",
         header: "Up",
         meta: { align: "right" },
         cell: ({ row }) => (
-          <span className={row.original.lanes > 0 && row.original.upLanes === 0 ? "text-red-600 dark:text-red-400" : undefined}>
+          <span
+            className={
+              row.original.lanes > 0 && row.original.upLanes === 0 ? "text-red-600 dark:text-red-400" : undefined
+            }
+          >
             {formatNumber(row.original.upLanes)}
           </span>
         ),
       },
-      { id: "created", accessorKey: "createdAt", header: "Added", cell: ({ row }) => <RelativeTime value={row.original.createdAt} /> },
+      {
+        id: "created",
+        accessorKey: "createdAt",
+        header: "Added",
+        cell: ({ row }) => <RelativeTime value={row.original.createdAt} />,
+      },
+      {
+        id: "expires",
+        accessorKey: "expiresAt",
+        header: "Expires",
+        cell: ({ row }) => <RelativeTime value={row.original.expiresAt} fallback="–" />,
+      },
     ]
     if (canWrite) {
       cols.push({
         id: "actions",
         header: () => <span className="sr-only">Actions</span>,
         enableSorting: false,
-        meta: { className: "w-10" },
+        meta: { className: connected ? "w-20" : "w-10" },
         cell: ({ row }) => (
-          <ConfirmDialog
-            trigger={
-              <Button variant="ghost" size="icon-sm" aria-label={`Delete key ${row.original.label}`}>
-                <Trash2Icon />
-              </Button>
-            }
-            title={`Delete key “${row.original.label}”?`}
-            description={
-              <p>
-                {row.original.lanes > 0
-                  ? `${row.original.lanes} lane${row.original.lanes === 1 ? "" : "s"} using this key will move to other keys or stop. `
-                  : null}
-                The key is removed from lanepool; it stays valid in your Surfshark account until you revoke it there.
-              </p>
-            }
-            confirmLabel="Delete key"
-            destructive
-            onConfirm={() => deleteKey.mutateAsync(row.original)}
-          />
+          <span className="inline-flex">
+            {connected ? (
+              <ConfirmDialog
+                trigger={
+                  <Button variant="ghost" size="icon-sm" aria-label={`Rotate key ${row.original.label}`} title="Rotate">
+                    <RefreshCwIcon />
+                  </Button>
+                }
+                title={`Rotate key “${row.original.label}”?`}
+                description={
+                  <p>
+                    A new key is generated and registered at Surfshark, and this one is deleted there, so every session
+                    using it ends.{" "}
+                    {row.original.lanes > 0
+                      ? `Its ${row.original.lanes} lane(s) reconnect on the new key, one at a time.`
+                      : null}
+                  </p>
+                }
+                confirmLabel="Rotate key"
+                onConfirm={() => rotateKey.mutateAsync(row.original)}
+              />
+            ) : null}
+            <ConfirmDialog
+              trigger={
+                <Button variant="ghost" size="icon-sm" aria-label={`Delete key ${row.original.label}`}>
+                  <Trash2Icon />
+                </Button>
+              }
+              title={`Delete key “${row.original.label}”?`}
+              description={
+                <p>
+                  {row.original.lanes > 0
+                    ? `${row.original.lanes} lane${row.original.lanes === 1 ? "" : "s"} using this key will move to other keys or stop. `
+                    : null}
+                  {connected
+                    ? "The key is also deleted in your Surfshark account, which ends every session using it immediately."
+                    : "The key is removed from lanepool only; it stays valid in your Surfshark account until you revoke it there. Connect your account above to do both at once."}
+                </p>
+              }
+              confirmLabel="Delete key"
+              destructive
+              onConfirm={() => deleteKey.mutateAsync(row.original)}
+            />
+          </span>
         ),
       })
     }
     return cols
-  }, [canWrite, updateKey, deleteKey])
+  }, [canWrite, updateKey, deleteKey, rotateKey, connected])
 
   return (
     <Card>
@@ -156,7 +231,8 @@ function SurfsharkCard() {
         <CardDescription>
           {p ? (
             <span className="tabular">
-              {formatNumber(p.serverCount)} servers available · list fetched <RelativeTime value={p.lastFetchedAt} fallback="never" />
+              {formatNumber(p.serverCount)} servers available · list fetched{" "}
+              <RelativeTime value={p.lastFetchedAt} fallback="never" />
             </span>
           ) : (
             "WireGuard keys and which locations become lanes."
@@ -188,8 +264,8 @@ function SurfsharkCard() {
               <div>
                 <h3 className="text-sm font-semibold">Keys</h3>
                 <p className="text-xs text-muted-foreground">
-                  Lanes are spread across enabled keys. More keys means fewer sessions per key, which providers are
-                  less likely to throttle.
+                  Lanes are spread across enabled keys. More keys means fewer sessions per key, which providers are less
+                  likely to throttle.
                 </p>
               </div>
               <div className="overflow-hidden rounded-md border">
@@ -227,7 +303,9 @@ function SurfsharkCard() {
 function AddKeyDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="grid-cols-[minmax(0,1fr)] sm:max-w-md">{open ? <AddKeyForm onDone={() => onOpenChange(false)} /> : null}</DialogContent>
+      <DialogContent className="grid-cols-[minmax(0,1fr)] sm:max-w-md">
+        {open ? <AddKeyForm onDone={() => onOpenChange(false)} /> : null}
+      </DialogContent>
     </Dialog>
   )
 }
@@ -253,12 +331,17 @@ function AddKeyForm({ onDone }: { onDone: () => void }) {
       <DialogHeader>
         <DialogTitle>Add Surfshark key</DialogTitle>
         <DialogDescription>
-          In your Surfshark account, open VPN → Manual setup → Desktop or mobile → WireGuard, generate a key pair and paste
-          the private key here.
+          In your Surfshark account, open VPN → Manual setup → Desktop or mobile → WireGuard, generate a key pair and
+          paste the private key here.
         </DialogDescription>
       </DialogHeader>
       <FormError message={general} />
-      <FormField label="Private key" htmlFor="k-private" error={localError ?? server.privateKey} description="Stored encrypted; only the public key is shown afterwards.">
+      <FormField
+        label="Private key"
+        htmlFor="k-private"
+        error={localError ?? server.privateKey}
+        description="Stored encrypted; only the public key is shown afterwards."
+      >
         <Input
           id="k-private"
           value={privateKey}
@@ -337,7 +420,10 @@ function SelectionForm({ selection, canWrite }: { selection: SurfsharkSelection;
 
   const lanes = Number.parseInt(lanesText, 10)
   const lanesError = !Number.isFinite(lanes) || lanes < 0 ? "Enter 0 or more." : null
-  const next: SurfsharkSelection = { ...form, lanes: Number.isFinite(lanes) ? lanes : 0 }
+  const next: SurfsharkSelection = {
+    ...form,
+    lanes: Number.isFinite(lanes) ? lanes : 0,
+  }
   const dirty = JSON.stringify(next) !== JSON.stringify(selection)
 
   const submit = (e: FormEvent) => {
@@ -373,7 +459,10 @@ function SelectionForm({ selection, canWrite }: { selection: SurfsharkSelection;
             className="tabular max-w-32"
           />
         </FormField>
-        <label htmlFor="s-virtual" className="flex items-start justify-between gap-4 rounded-md border p-3 md:self-start">
+        <label
+          htmlFor="s-virtual"
+          className="flex items-start justify-between gap-4 rounded-md border p-3 md:self-start"
+        >
           <span className="space-y-1">
             <span className="block text-sm font-medium">Include virtual locations</span>
             <span className="block text-xs text-muted-foreground">
@@ -386,7 +475,12 @@ function SelectionForm({ selection, canWrite }: { selection: SurfsharkSelection;
             onCheckedChange={(includeVirtual) => setForm((f) => ({ ...f, includeVirtual }))}
           />
         </label>
-        <FormField label="Include countries" htmlFor="s-countries" error={server.countries} description="Empty = all countries.">
+        <FormField
+          label="Include countries"
+          htmlFor="s-countries"
+          error={server.countries}
+          description="Empty = all countries."
+        >
           <MultiSelect
             id="s-countries"
             options={countryOptions}
@@ -412,7 +506,11 @@ function SelectionForm({ selection, canWrite }: { selection: SurfsharkSelection;
           label="Pinned locations"
           htmlFor="s-locations"
           error={server.locations}
-          description={locations.isError ? `Could not load locations: ${errorMessage(locations.error)}` : "Always run a lane in these locations."}
+          description={
+            locations.isError
+              ? `Could not load locations: ${errorMessage(locations.error)}`
+              : "Always run a lane in these locations."
+          }
           className="md:col-span-2"
         >
           <MultiSelect
@@ -482,7 +580,12 @@ function WireguardCard() {
 
   const columns = useMemo<ColumnDef<WireguardConfig>[]>(() => {
     const cols: ColumnDef<WireguardConfig>[] = [
-      { id: "name", accessorKey: "name", header: "Name", cell: ({ row }) => <span className="font-medium">{row.original.name}</span> },
+      {
+        id: "name",
+        accessorKey: "name",
+        header: "Name",
+        cell: ({ row }) => <span className="font-medium">{row.original.name}</span>,
+      },
       {
         id: "location",
         accessorFn: (c) => c.countryCode,
@@ -508,7 +611,12 @@ function WireguardCard() {
           />
         ),
       },
-      { id: "created", accessorKey: "createdAt", header: "Added", cell: ({ row }) => <RelativeTime value={row.original.createdAt} /> },
+      {
+        id: "created",
+        accessorKey: "createdAt",
+        header: "Added",
+        cell: ({ row }) => <RelativeTime value={row.original.createdAt} />,
+      },
     ]
     if (canWrite) {
       cols.push({
@@ -541,7 +649,9 @@ function WireguardCard() {
         <CardTitle className="flex items-center gap-2">
           <ServerIcon className="size-4 text-muted-foreground" /> Generic WireGuard
         </CardTitle>
-        <CardDescription>Any WireGuard server (another VPN provider or your own VPS). Each config is one lane.</CardDescription>
+        <CardDescription>
+          Any WireGuard server (another VPN provider or your own VPS). Each config is one lane.
+        </CardDescription>
         <CardAction>
           <WriteOnly>
             <Button size="sm" variant="outline" onClick={() => setAddOpen(true)}>
@@ -574,7 +684,9 @@ function WireguardCard() {
         )}
       </CardContent>
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
-        <DialogContent className="grid-cols-[minmax(0,1fr)] sm:max-w-lg">{addOpen ? <AddWireguardForm onDone={() => setAddOpen(false)} /> : null}</DialogContent>
+        <DialogContent className="grid-cols-[minmax(0,1fr)] sm:max-w-lg">
+          {addOpen ? <AddWireguardForm onDone={() => setAddOpen(false)} /> : null}
+        </DialogContent>
       </Dialog>
     </Card>
   )
@@ -606,11 +718,17 @@ function AddWireguardForm({ onDone }: { onDone: () => void }) {
     e.preventDefault()
     const errs: Record<string, string> = {}
     if (!name.trim()) errs.name = "Name is required."
-    if (!/\[Interface\]/i.test(config) || !/\[Peer\]/i.test(config)) errs.config = "Paste a full wg-quick config with [Interface] and [Peer] sections."
+    if (!/\[Interface\]/i.test(config) || !/\[Peer\]/i.test(config))
+      errs.config = "Paste a full wg-quick config with [Interface] and [Peer] sections."
     setLocal(errs)
     if (Object.keys(errs).length) return
     add.mutate(
-      { name: name.trim(), config, countryCode: countryCode || undefined, city: city.trim() || undefined },
+      {
+        name: name.trim(),
+        config,
+        countryCode: countryCode || undefined,
+        city: city.trim() || undefined,
+      },
       { onSuccess: onDone },
     )
   }
@@ -623,7 +741,13 @@ function AddWireguardForm({ onDone }: { onDone: () => void }) {
       </DialogHeader>
       <FormError message={general} />
       <FormField label="Name" htmlFor="wg-name" error={errors.name}>
-        <Input id="wg-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="vps-frankfurt" autoFocus />
+        <Input
+          id="wg-name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="vps-frankfurt"
+          autoFocus
+        />
       </FormField>
       <FormField label="wg-quick config" htmlFor="wg-config" error={errors.config}>
         <Textarea
@@ -638,7 +762,12 @@ function AddWireguardForm({ onDone }: { onDone: () => void }) {
         />
       </FormField>
       <div className="grid gap-4 sm:grid-cols-2">
-        <FormField label="Country" htmlFor="wg-country" error={errors.countryCode} description="Optional; used for country routing.">
+        <FormField
+          label="Country"
+          htmlFor="wg-country"
+          error={errors.countryCode}
+          description="Optional; used for country routing."
+        >
           <Select value={countryCode || "none"} onValueChange={(v) => setCountryCode(v === "none" ? "" : v)}>
             <SelectTrigger id="wg-country" className="w-full">
               <SelectValue />
@@ -669,4 +798,3 @@ function AddWireguardForm({ onDone }: { onDone: () => void }) {
     </form>
   )
 }
-

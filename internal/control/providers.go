@@ -37,24 +37,26 @@ func publicKey(priv string) (string, error) {
 // --- Surfshark ------------------------------------------------------------------
 
 type surfsharkKey struct {
-	ID        int64     `json:"id"`
-	Label     string    `json:"label"`
-	PublicKey string    `json:"publicKey"`
-	Enabled   bool      `json:"enabled"`
-	CreatedAt time.Time `json:"createdAt"`
-	Lanes     int       `json:"lanes"`
-	UpLanes   int       `json:"upLanes"`
+	ID        int64      `json:"id"`
+	Label     string     `json:"label"`
+	PublicKey string     `json:"publicKey"`
+	Enabled   bool       `json:"enabled"`
+	CreatedAt time.Time  `json:"createdAt"`
+	Lanes     int        `json:"lanes"`
+	UpLanes   int        `json:"upLanes"`
+	Managed   bool       `json:"managed"`             // registered by lanepool through the account API
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"` // at Surfshark
 }
 
 func (s *Server) surfsharkKeys(ctx context.Context) ([]surfsharkKey, error) {
-	rows, err := s.db.Query(ctx, `SELECT id, label, public_key, enabled, created_at FROM provider_keys
+	rows, err := s.db.Query(ctx, `SELECT id, label, public_key, enabled, created_at, managed, expires_at FROM provider_keys
 		WHERE provider = 'surfshark' ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
 	keys, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (surfsharkKey, error) {
 		var k surfsharkKey
-		err := row.Scan(&k.ID, &k.Label, &k.PublicKey, &k.Enabled, &k.CreatedAt)
+		err := row.Scan(&k.ID, &k.Label, &k.PublicKey, &k.Enabled, &k.CreatedAt, &k.Managed, &k.ExpiresAt)
 		return k, err
 	})
 	if err != nil {
@@ -208,11 +210,21 @@ func (s *Server) deleteSurfsharkKey(_ http.ResponseWriter, r *http.Request) (any
 	if err != nil {
 		return nil, err
 	}
-	var label string
-	if err := s.db.QueryRow(r.Context(), `DELETE FROM provider_keys WHERE id = $1 AND provider = 'surfshark' RETURNING label`, id).Scan(&label); err != nil {
+	// With the account connected the key is also deleted at Surfshark, which
+	// ends every session using it right away.
+	acct, _, err := s.surfsharkAccount(r.Context())
+	if err != nil {
 		return nil, err
 	}
-	s.audit(r.Context(), who(r), "admin.key_deleted", "deleted Surfshark key "+keyName(label, id))
+	label, err := s.deleteKeyEverywhere(r.Context(), acct, id)
+	if err != nil {
+		return nil, err
+	}
+	where := "in lanepool only"
+	if acct != nil {
+		where = "in lanepool and at Surfshark"
+	}
+	s.audit(r.Context(), who(r), "admin.key_deleted", "deleted Surfshark key "+keyName(label, id)+" "+where)
 	s.requestLaneSync()
 	return nil, nil
 }

@@ -1,10 +1,6 @@
-import { useMemo, useState } from "react";
-import type {
-  ColumnDef,
-  ColumnFiltersState,
-  FilterFn,
-} from "@tanstack/react-table";
-import { Link } from "@tanstack/react-router";
+import { useMemo, useState } from "react"
+import type { ColumnDef, ColumnFiltersState, FilterFn } from "@tanstack/react-table"
+import { Link } from "@tanstack/react-router"
 import {
   MoreHorizontalIcon,
   NetworkIcon,
@@ -13,10 +9,10 @@ import {
   RotateCwIcon,
   SearchIcon,
   Trash2Icon,
-} from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+} from "lucide-react"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Card } from "@/components/ui/card"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,52 +20,27 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupInput,
-} from "@/components/ui/input-group";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { LaneStatusBadge } from "@/components/badges";
-import { AddLanesDialog } from "@/components/add-lanes-dialog";
-import { ConfirmDialog, ControlledConfirm } from "@/components/confirm-dialog";
-import { CopyButton } from "@/components/copy-button";
-import { CountryLabel } from "@/components/country";
-import { DataTable } from "@/components/data-table";
-import { PageHeader } from "@/components/page-header";
-import { EmptyState, ErrorState } from "@/components/states";
-import { RelativeTime } from "@/components/time";
-import { WriteOnly } from "@/components/write-only";
-import { useCanWrite } from "@/hooks/use-auth";
-import {
-  useLanes,
-  useRemoveLane,
-  useRestartAllLanes,
-  useRestartLane,
-  useSetLaneEnabled,
-} from "@/hooks/use-lanes";
-import { useStreamLive } from "@/hooks/use-stream";
-import { LANE_STATUSES, LANE_STATUS_META } from "@/lib/constants";
-import {
-  countryName,
-  flagEmoji,
-  formatLatency,
-  formatNumber,
-} from "@/lib/format";
-import type { Lane, LaneStatus } from "@/lib/types";
-import { cn } from "@/lib/utils";
+} from "@/components/ui/dropdown-menu"
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { LaneStatusBadge } from "@/components/badges"
+import { AddLanesDialog } from "@/components/add-lanes-dialog"
+import { ConfirmDialog, ControlledConfirm } from "@/components/confirm-dialog"
+import { CopyButton } from "@/components/copy-button"
+import { CountryLabel } from "@/components/country"
+import { DataTable } from "@/components/data-table"
+import { PageHeader } from "@/components/page-header"
+import { EmptyState, ErrorState } from "@/components/states"
+import { RelativeTime } from "@/components/time"
+import { WriteOnly } from "@/components/write-only"
+import { useCanWrite } from "@/hooks/use-auth"
+import { useLanes, useRemoveLane, useRestartAllLanes, useRestartLane, useSetLaneEnabled } from "@/hooks/use-lanes"
+import { useStreamLive } from "@/hooks/use-stream"
+import { LANE_STATUSES, LANE_STATUS_META } from "@/lib/constants"
+import { countryName, flagEmoji, formatLatency, formatNumber } from "@/lib/format"
+import type { Lane, LaneStatus } from "@/lib/types"
+import { cn } from "@/lib/utils"
 
 const STATUS_ORDER: Record<LaneStatus, number> = {
   down: 0,
@@ -78,31 +49,22 @@ const STATUS_ORDER: Record<LaneStatus, number> = {
   queued: 3,
   up: 4,
   disabled: 5,
-};
+}
 
 const laneSearch: FilterFn<Lane> = (row, _columnId, filterValue: string) => {
-  const q = filterValue.trim().toLowerCase();
-  if (!q) return true;
-  const l = row.original;
-  return [
-    l.name,
-    l.id,
-    l.exitIp,
-    l.city,
-    l.country,
-    l.countryCode,
-    l.keyLabel,
-    l.lastError,
-  ]
+  const q = filterValue.trim().toLowerCase()
+  if (!q) return true
+  const l = row.original
+  return [l.name, l.id, l.exitIp, l.city, l.country, l.countryCode, l.keyLabel, l.lastError]
     .filter(Boolean)
-    .some((v) => String(v).toLowerCase().includes(q));
-};
+    .some((v) => String(v).toLowerCase().includes(q))
+}
 
 function LaneActions({ lane }: { lane: Lane }) {
-  const restart = useRestartLane();
-  const setEnabled = useSetLaneEnabled();
-  const remove = useRemoveLane();
-  const [confirmRemove, setConfirmRemove] = useState(false);
+  const restart = useRestartLane()
+  const setEnabled = useSetLaneEnabled()
+  const remove = useRemoveLane()
+  const [confirmRemove, setConfirmRemove] = useState(false)
   return (
     <>
       <ControlledConfirm
@@ -115,89 +77,65 @@ function LaneActions({ lane }: { lane: Lane }) {
         description={
           lane.provider === "surfshark" ? (
             <p>
-              The lane is closed and this location won't be picked automatically
-              again. You can add it back from <strong>Add lanes</strong> at any
-              time.
+              The lane is closed and this location won't be picked automatically again. You can add it back from{" "}
+              <strong>Add lanes</strong> at any time.
             </p>
           ) : (
-            <p>
-              This deletes the WireGuard config behind this lane. Open
-              connections on it are closed.
-            </p>
+            <p>This deletes the WireGuard config behind this lane. Open connections on it are closed.</p>
           )
         }
       />
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label={`Actions for ${lane.name}`}
-          >
+          <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${lane.name}`}>
             <MoreHorizontalIcon />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
-          <DropdownMenuLabel className="truncate">
-            {lane.name}
-          </DropdownMenuLabel>
-          <DropdownMenuItem
-            disabled={!lane.enabled || restart.isPending}
-            onSelect={() => restart.mutate(lane)}
-          >
+          <DropdownMenuLabel className="truncate">{lane.name}</DropdownMenuLabel>
+          <DropdownMenuItem disabled={!lane.enabled || restart.isPending} onSelect={() => restart.mutate(lane)}>
             <RotateCwIcon /> Restart lane
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           {lane.enabled ? (
-            <DropdownMenuItem
-              variant="destructive"
-              onSelect={() => setEnabled.mutate({ lane, enabled: false })}
-            >
+            <DropdownMenuItem variant="destructive" onSelect={() => setEnabled.mutate({ lane, enabled: false })}>
               <PowerOffIcon /> Disable
             </DropdownMenuItem>
           ) : (
-            <DropdownMenuItem
-              onSelect={() => setEnabled.mutate({ lane, enabled: true })}
-            >
+            <DropdownMenuItem onSelect={() => setEnabled.mutate({ lane, enabled: true })}>
               <PowerIcon /> Enable
             </DropdownMenuItem>
           )}
-          <DropdownMenuItem
-            variant="destructive"
-            onSelect={() => setConfirmRemove(true)}
-          >
+          <DropdownMenuItem variant="destructive" onSelect={() => setConfirmRemove(true)}>
             <Trash2Icon /> Remove lane
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
     </>
-  );
+  )
 }
 
 export function LanesPage() {
-  const lanes = useLanes();
-  const live = useStreamLive();
-  const canWrite = useCanWrite();
-  const restartAll = useRestartAllLanes();
-  const [status, setStatus] = useState<string>("all");
-  const [country, setCountry] = useState<string>("all");
-  const [search, setSearch] = useState("");
+  const lanes = useLanes()
+  const live = useStreamLive()
+  const canWrite = useCanWrite()
+  const restartAll = useRestartAllLanes()
+  const [status, setStatus] = useState<string>("all")
+  const [country, setCountry] = useState<string>("all")
+  const [search, setSearch] = useState("")
 
   const countries = useMemo(() => {
-    const set = new Set<string>();
-    for (const l of lanes.data ?? [])
-      if (l.countryCode) set.add(l.countryCode.toLowerCase());
-    return [...set].sort((a, b) =>
-      countryName(a).localeCompare(countryName(b)),
-    );
-  }, [lanes.data]);
+    const set = new Set<string>()
+    for (const l of lanes.data ?? []) if (l.countryCode) set.add(l.countryCode.toLowerCase())
+    return [...set].sort((a, b) => countryName(a).localeCompare(countryName(b)))
+  }, [lanes.data])
 
   const columnFilters = useMemo<ColumnFiltersState>(() => {
-    const f: ColumnFiltersState = [];
-    if (status !== "all") f.push({ id: "status", value: status });
-    if (country !== "all") f.push({ id: "location", value: country });
-    return f;
-  }, [status, country]);
+    const f: ColumnFiltersState = []
+    if (status !== "all") f.push({ id: "status", value: status })
+    if (country !== "all") f.push({ id: "location", value: country })
+    return f
+  }, [status, country])
 
   const columns = useMemo<ColumnDef<Lane>[]>(() => {
     const cols: ColumnDef<Lane>[] = [
@@ -206,8 +144,7 @@ export function LanesPage() {
         accessorKey: "status",
         header: "Status",
         filterFn: "equalsString",
-        sortingFn: (a, b) =>
-          STATUS_ORDER[a.original.status] - STATUS_ORDER[b.original.status],
+        sortingFn: (a, b) => STATUS_ORDER[a.original.status] - STATUS_ORDER[b.original.status],
         cell: ({ row }) => <LaneStatusBadge status={row.original.status} />,
       },
       {
@@ -215,17 +152,10 @@ export function LanesPage() {
         accessorKey: "name",
         header: "Name",
         cell: ({ row }) => {
-          const l = row.original;
+          const l = row.original
           return (
             <div className="flex items-center gap-2">
-              <span
-                className={cn(
-                  "font-medium",
-                  !l.enabled && "text-muted-foreground",
-                )}
-              >
-                {l.name}
-              </span>
+              <span className={cn("font-medium", !l.enabled && "text-muted-foreground")}>{l.name}</span>
               {l.provider === "wireguard" ? (
                 <Badge variant="outline" className="font-normal">
                   WireGuard
@@ -238,14 +168,11 @@ export function LanesPage() {
                       virtual
                     </Badge>
                   </TooltipTrigger>
-                  <TooltipContent>
-                    Virtual location: the server is physically in another
-                    country.
-                  </TooltipContent>
+                  <TooltipContent>Virtual location: the server is physically in another country.</TooltipContent>
                 </Tooltip>
               ) : null}
             </div>
-          );
+          )
         },
       },
       {
@@ -257,12 +184,7 @@ export function LanesPage() {
           `${a.original.country ?? ""}${a.original.city ?? ""}`.localeCompare(
             `${b.original.country ?? ""}${b.original.city ?? ""}`,
           ),
-        cell: ({ row }) => (
-          <CountryLabel
-            code={row.original.countryCode}
-            city={row.original.city}
-          />
-        ),
+        cell: ({ row }) => <CountryLabel code={row.original.countryCode} city={row.original.city} />,
       },
       {
         id: "exitIp",
@@ -325,16 +247,11 @@ export function LanesPage() {
           row.original.lastError ? (
             <Tooltip>
               <TooltipTrigger asChild>
-                <span
-                  className="block max-w-56 truncate text-xs text-red-700 dark:text-red-400"
-                  tabIndex={0}
-                >
+                <span className="block max-w-56 truncate text-xs text-red-700 dark:text-red-400" tabIndex={0}>
                   {row.original.lastError}
                 </span>
               </TooltipTrigger>
-              <TooltipContent className="max-w-sm break-words">
-                {row.original.lastError}
-              </TooltipContent>
+              <TooltipContent className="max-w-sm break-words">{row.original.lastError}</TooltipContent>
             </Tooltip>
           ) : (
             <span className="text-muted-foreground">–</span>
@@ -346,7 +263,7 @@ export function LanesPage() {
         header: "Next retry",
         cell: ({ row }) => <RelativeTime value={row.original.nextRetry} />,
       },
-    ];
+    ]
     if (canWrite) {
       cols.push({
         id: "actions",
@@ -354,13 +271,12 @@ export function LanesPage() {
         enableSorting: false,
         meta: { className: "w-10" },
         cell: ({ row }) => <LaneActions lane={row.original} />,
-      });
+      })
     }
-    return cols;
-  }, [canWrite]);
+    return cols
+  }, [canWrite])
 
-  const filtered =
-    status !== "all" || country !== "all" || search.trim() !== "";
+  const filtered = status !== "all" || country !== "all" || search.trim() !== ""
 
   return (
     <>
@@ -372,19 +288,9 @@ export function LanesPage() {
             <span
               className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"
               aria-live="polite"
-              title={
-                live
-                  ? "Updates stream in every ~2 s"
-                  : "Live stream unavailable; refreshing every 5 s"
-              }
+              title={live ? "Updates stream in every ~2 s" : "Live stream unavailable; refreshing every 5 s"}
             >
-              <span
-                aria-hidden
-                className={cn(
-                  "size-2 rounded-full",
-                  live ? "bg-emerald-500" : "bg-amber-500",
-                )}
-              />
+              <span aria-hidden className={cn("size-2 rounded-full", live ? "bg-emerald-500" : "bg-amber-500")} />
               {live ? "Live" : "Polling"}
             </span>
             <WriteOnly>
@@ -393,11 +299,7 @@ export function LanesPage() {
             <WriteOnly>
               <ConfirmDialog
                 trigger={
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={!lanes.data?.length || restartAll.isPending}
-                  >
+                  <Button variant="outline" size="sm" disabled={!lanes.data?.length || restartAll.isPending}>
                     <RotateCwIcon /> Restart all lanes
                   </Button>
                 }
@@ -408,15 +310,13 @@ export function LanesPage() {
                 description={
                   <>
                     <p>
-                      Lanes reconnect <strong>one at a time</strong> to respect
-                      pacing, so the full restart can take a while. Connections
-                      on each lane are closed as it restarts.
+                      Lanes reconnect <strong>one at a time</strong> to respect pacing, so the full restart can take a
+                      while. Connections on each lane are closed as it restarts.
                     </p>
                     <p>
-                      WireGuard has no disconnect message: every restart leaves
-                      the old session on the provider side until it times out.
-                      Restarting often can get your exit IPs or account
-                      rate-limited, so avoid doing this regularly.
+                      WireGuard has no disconnect message: every restart leaves the old session on the provider side
+                      until it times out. Restarting often can get your exit IPs or account rate-limited, so avoid doing
+                      this regularly.
                     </p>
                   </>
                 }
@@ -441,10 +341,7 @@ export function LanesPage() {
           </InputGroup>
           <div className="flex gap-2">
             <Select value={status} onValueChange={setStatus}>
-              <SelectTrigger
-                className="w-full sm:w-40"
-                aria-label="Filter by status"
-              >
+              <SelectTrigger className="w-full sm:w-40" aria-label="Filter by status">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -457,10 +354,7 @@ export function LanesPage() {
               </SelectContent>
             </Select>
             <Select value={country} onValueChange={setCountry}>
-              <SelectTrigger
-                className="w-full sm:w-48"
-                aria-label="Filter by country"
-              >
+              <SelectTrigger className="w-full sm:w-48" aria-label="Filter by country">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -478,9 +372,9 @@ export function LanesPage() {
               variant="ghost"
               size="sm"
               onClick={() => {
-                setStatus("all");
-                setCountry("all");
-                setSearch("");
+                setStatus("all")
+                setCountry("all")
+                setSearch("")
               }}
             >
               Reset
@@ -491,10 +385,7 @@ export function LanesPage() {
           </span>
         </div>
         {lanes.isError && !lanes.data ? (
-          <ErrorState
-            error={lanes.error}
-            onRetry={() => void lanes.refetch()}
-          />
+          <ErrorState error={lanes.error} onRetry={() => void lanes.refetch()} />
         ) : (
           <DataTable
             columns={columns}
@@ -505,16 +396,10 @@ export function LanesPage() {
             globalFilterFn={laneSearch}
             columnFilters={columnFilters}
             initialSorting={[{ id: "status", desc: false }]}
-            rowClassName={(row) =>
-              row.original.enabled ? undefined : "opacity-60"
-            }
+            rowClassName={(row) => (row.original.enabled ? undefined : "opacity-60")}
             empty={
               filtered ? (
-                <EmptyState
-                  icon={<SearchIcon />}
-                  title="No lanes match"
-                  description="Try a different filter."
-                />
+                <EmptyState icon={<SearchIcon />} title="No lanes match" description="Try a different filter." />
               ) : (
                 <EmptyState
                   icon={<NetworkIcon />}
@@ -532,5 +417,5 @@ export function LanesPage() {
         )}
       </Card>
     </>
-  );
+  )
 }

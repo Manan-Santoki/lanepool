@@ -1,8 +1,8 @@
-import { useMemo, useState } from "react";
-import { Link } from "@tanstack/react-router";
-import { PlusIcon } from "lucide-react";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
+import { useMemo, useState } from "react"
+import { Link } from "@tanstack/react-router"
+import { PlusIcon } from "lucide-react"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogContent,
@@ -11,26 +11,26 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from "@/components/ui/dialog";
-import { Spinner } from "@/components/ui/spinner";
-import { Flag } from "@/components/country";
-import { FormError, FormField } from "@/components/form-field";
-import { MultiSelect, type MultiSelectOption } from "@/components/multi-select";
-import { useAddLanes } from "@/hooks/use-lanes";
-import { useSurfshark, useSurfsharkLocations } from "@/hooks/use-providers";
-import { errorMessage, fieldErrors } from "@/lib/api";
-import type { Lane } from "@/lib/types";
+} from "@/components/ui/dialog"
+import { Spinner } from "@/components/ui/spinner"
+import { Flag } from "@/components/country"
+import { FormError, FormField } from "@/components/form-field"
+import { MultiSelect, type MultiSelectOption } from "@/components/multi-select"
+import { useAddLanes } from "@/hooks/use-lanes"
+import { useSurfshark, useSurfsharkLocations } from "@/hooks/use-providers"
+import { errorMessage, fieldErrors } from "@/lib/api"
+import type { Lane } from "@/lib/types"
 
 /** Pick Surfshark locations (any country or city) and add them as lanes. */
 export function AddLanesDialog({ lanes }: { lanes: Lane[] }) {
-  const [open, setOpen] = useState(false);
-  const [picked, setPicked] = useState<string[]>([]);
-  const locations = useSurfsharkLocations(open);
-  const provider = useSurfshark();
-  const add = useAddLanes();
-  const hasKeys = (provider.data?.keys ?? []).some((k) => k.enabled);
+  const [open, setOpen] = useState(false)
+  const [picked, setPicked] = useState<string[]>([])
+  const locations = useSurfsharkLocations(open)
+  const provider = useSurfshark()
+  const add = useAddLanes()
+  const hasKeys = (provider.data?.keys ?? []).some((k) => k.enabled)
 
-  const active = useMemo(() => new Set(lanes.map((l) => l.id)), [lanes]);
+  const active = useMemo(() => new Set(lanes.map((l) => l.id)), [lanes])
   const options = useMemo<MultiSelectOption[]>(
     () =>
       (locations.data ?? [])
@@ -44,26 +44,23 @@ export function AddLanesDialog({ lanes }: { lanes: Lane[] }) {
         }))
         .sort((a, b) => a.label.localeCompare(b.label)),
     [locations.data, active],
-  );
+  )
 
-  const server = fieldErrors(add.error);
-  const general =
-    add.error && Object.keys(server).length === 0
-      ? errorMessage(add.error)
-      : null;
+  const server = fieldErrors(add.error)
+  const general = add.error && Object.keys(server).length === 0 ? errorMessage(add.error) : null
 
   const submit = async () => {
-    await add.mutateAsync(picked);
-    setPicked([]);
-    setOpen(false);
-  };
+    await add.mutateAsync(picked)
+    setPicked([])
+    setOpen(false)
+  }
 
   return (
     <Dialog
       open={open}
       onOpenChange={(o) => {
-        setOpen(o);
-        if (!o) add.reset();
+        setOpen(o)
+        if (!o) add.reset()
       }}
     >
       <DialogTrigger asChild>
@@ -75,9 +72,8 @@ export function AddLanesDialog({ lanes }: { lanes: Lane[] }) {
         <DialogHeader>
           <DialogTitle>Add lanes</DialogTitle>
           <DialogDescription>
-            Pick any Surfshark locations. Each location becomes one lane with
-            its own exit IP. Surfshark assigns the IP, so you choose the city,
-            not the address.
+            Pick any Surfshark locations. Each location becomes one lane with its own exit IP. Surfshark assigns the IP,
+            so you choose the city, not the address.
           </DialogDescription>
         </DialogHeader>
         {!provider.isPending && !hasKeys ? (
@@ -85,11 +81,7 @@ export function AddLanesDialog({ lanes }: { lanes: Lane[] }) {
             <AlertTitle>Add a Surfshark key first</AlertTitle>
             <AlertDescription>
               <p>Lanes need a WireGuard key to connect.</p>
-              <Link
-                to="/providers"
-                className="underline underline-offset-4"
-                onClick={() => setOpen(false)}
-              >
+              <Link to="/providers" className="underline underline-offset-4" onClick={() => setOpen(false)}>
                 Go to Providers
               </Link>
             </AlertDescription>
@@ -111,9 +103,7 @@ export function AddLanesDialog({ lanes }: { lanes: Lane[] }) {
             options={options}
             value={picked}
             onChange={setPicked}
-            placeholder={
-              locations.isPending ? "Loading locations…" : "Choose locations"
-            }
+            placeholder={locations.isPending ? "Loading locations…" : "Choose locations"}
             searchPlaceholder="Search city, country or ID…"
             emptyText={locations.isPending ? "Loading…" : "No more locations."}
             maxChips={20}
@@ -123,15 +113,12 @@ export function AddLanesDialog({ lanes }: { lanes: Lane[] }) {
           <Button variant="ghost" onClick={() => setOpen(false)}>
             Cancel
           </Button>
-          <Button
-            onClick={submit}
-            disabled={picked.length === 0 || add.isPending}
-          >
+          <Button onClick={submit} disabled={picked.length === 0 || add.isPending}>
             {add.isPending ? <Spinner /> : null}
             Add {picked.length || ""} lane{picked.length === 1 ? "" : "s"}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  );
+  )
 }

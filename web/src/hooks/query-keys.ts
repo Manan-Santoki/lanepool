@@ -15,6 +15,7 @@ export const qk = {
   burned: ["burned"] as const,
   surfshark: ["providers", "surfshark"] as const,
   surfsharkLocations: ["providers", "surfshark", "locations"] as const,
+  surfsharkAccount: ["providers", "surfshark", "account"] as const,
   wireguard: ["providers", "wireguard"] as const,
   channels: ["alerts", "channels"] as const,
   rules: ["alerts", "rules"] as const,

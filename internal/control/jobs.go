@@ -30,6 +30,9 @@ func (s *Server) jobs(ctx context.Context) {
 			return
 		case <-minute.C:
 			s.alerting.evaluate(ctx, nil)
+			if time.Now().Minute()%5 == 0 {
+				s.manageKeys(ctx)
+			}
 		case <-hourly.C:
 			s.housekeeping(ctx)
 		}

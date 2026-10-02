@@ -45,7 +45,8 @@ export function useAddLanes() {
     mutationFn: (locations: string[]) => api.lanes.add(locations),
     invalidate: [qk.lanes, qk.overview, qk.surfshark],
     toastError: false,
-    success: (_, locations) => `Added ${locations.length} lane${locations.length === 1 ? "" : "s"}; they connect one at a time`,
+    success: (_, locations) =>
+      `Added ${locations.length} lane${locations.length === 1 ? "" : "s"}; they connect one at a time`,
   })
 }
 

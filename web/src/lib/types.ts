@@ -72,7 +72,12 @@ export interface Page<T> { items: T[]; nextCursor?: string }
 
 export interface BurnedIp { id: number; domain: string; laneId: string; laneName?: string; exitIp?: string; source: "manual" | "auto" | "api"; note: string; createdAt: string; expiresAt: string }
 
-export interface SurfsharkKey { id: number; label: string; publicKey: string; enabled: boolean; createdAt: string; lanes: number; upLanes: number }
+export interface SurfsharkKey { id: number; label: string; publicKey: string; enabled: boolean; createdAt: string; lanes: number; upLanes: number; managed: boolean; expiresAt?: string }
+export interface SurfsharkRemoteKey { id: string; name: string; pubKey: string; expiresAt?: string; createdAt?: string; localKeyId?: number }
+export interface SurfsharkAccount {
+  connected: boolean; email: string; autoManage: boolean; lanesPerKey: number; rotateFailures: number;
+  lastError?: string; lastSyncAt?: string | null; remoteKeys?: SurfsharkRemoteKey[]
+}
 export interface SurfsharkSelection { lanes: number; countries: string[]; excludeCountries: string[]; locations: string[]; excludeLocations: string[]; includeVirtual: boolean }
 export interface SurfsharkProvider { keys: SurfsharkKey[]; selection: SurfsharkSelection; serverCount: number; lastFetchedAt?: string; fetchError?: string }
 export interface SurfsharkLocation { id: string; country: string; countryCode: string; city: string; virtual: boolean; load: number }

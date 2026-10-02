@@ -87,7 +87,9 @@ interface Page<T> { items: T[]; nextCursor?: string }
 
 interface BurnedIp { id: number; domain: string; laneId: string; laneName?: string; exitIp?: string; source: "manual" | "auto" | "api"; note: string; createdAt: string; expiresAt: string }
 
-interface SurfsharkKey { id: number; label: string; publicKey: string; enabled: boolean; createdAt: string; lanes: number; upLanes: number }
+interface SurfsharkKey { id: number; label: string; publicKey: string; enabled: boolean; createdAt: string; lanes: number; upLanes: number; managed: boolean; expiresAt?: string }
+interface SurfsharkRemoteKey { id: string; name: string; pubKey: string; expiresAt?: string; createdAt?: string; localKeyId?: number }
+interface SurfsharkAccount { connected: boolean; email: string; autoManage: boolean; lanesPerKey: number; rotateFailures: number; lastError?: string; lastSyncAt?: string; remoteKeys?: SurfsharkRemoteKey[] }
 interface SurfsharkSelection {
   lanes: number;              // lanes filled from the country filters (pinned locations always run on top)
   countries: string[]; excludeCountries: string[];
@@ -207,6 +209,13 @@ interface TopItem { key: string; label: string; bytes: number; connections: numb
 | DELETE | /api/providers/surfshark/keys/:id | | `204` |
 | PUT | /api/providers/surfshark/selection | `SurfsharkSelection` | `SurfsharkProvider` |
 | GET | /api/providers/surfshark/locations | | `SurfsharkLocation[]` |
+| GET | /api/providers/surfshark/account | | `SurfsharkAccount` (with `remoteKeys` when connected) |
+| PUT | /api/providers/surfshark/account | `{ email, password }` | `SurfsharkAccount`; checks the login first, stores the password encrypted |
+| PATCH | /api/providers/surfshark/account | `{ autoManage?, lanesPerKey?, rotateFailures? }` | `SurfsharkAccount` |
+| DELETE | /api/providers/surfshark/account | | `204`; forgets the login, keeps the keys |
+| POST | /api/providers/surfshark/keys/generate | `{ count }` (1–20) | `SurfsharkKey[]`; new key pairs registered at Surfshark |
+| POST | /api/providers/surfshark/keys/:id/rotate | | `SurfsharkKey` (the new key); the old one is deleted at Surfshark, ending its sessions |
+| DELETE | /api/providers/surfshark/remote-keys/:remoteId | | `204`; deletes a key registered at Surfshark (and in lanepool if it's used there) |
 | GET | /api/providers/wireguard | | `WireguardConfig[]` |
 | POST | /api/providers/wireguard | `{ name, config /* wg-quick text */, countryCode?, city? }` | `WireguardConfig` |
 | PATCH | /api/providers/wireguard/:id | `{ enabled?, name?, countryCode?, city? }` | `WireguardConfig` |

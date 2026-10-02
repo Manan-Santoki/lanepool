@@ -28,7 +28,9 @@ type Config struct {
 	EngineToken  string // shared with the engine
 	CookieSecure bool   // set the Secure flag on the session cookie (HTTPS dashboards)
 	SurfsharkAPI string // override for tests
-	Web          fs.FS  // built dashboard (web/dist); nil serves a placeholder
+	// SurfsharkAccountAPI is the base URL of Surfshark's account API (tests).
+	SurfsharkAccountAPI string
+	Web                 fs.FS // built dashboard (web/dist); nil serves a placeholder
 
 	// First-boot bootstrap (only used while the database is empty).
 	AdminEmail    string
@@ -55,6 +57,7 @@ type Server struct {
 	serversMu    sync.Mutex
 	syncRequired chan struct{}
 
+	accounts      surfsharkAccounts
 	logins        *rateLimiter
 	loginsByEmail *rateLimiter
 	alerting      *alerter

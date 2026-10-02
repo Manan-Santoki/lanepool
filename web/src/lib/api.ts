@@ -36,6 +36,7 @@ import type {
   TrafficPoint,
   WireguardConfig,
   WireguardInput,
+  SurfsharkAccount,
 } from "@/lib/types"
 
 /** Error thrown for every non-2xx API response (and for network failures, with status 0). */
@@ -117,7 +118,13 @@ async function request<T>(method: string, path: string, opts: RequestOptions = {
 
   let res: Response
   try {
-    res = await fetch(url, { method, headers, body, credentials: "include", signal: opts.signal })
+    res = await fetch(url, {
+      method,
+      headers,
+      body,
+      credentials: "include",
+      signal: opts.signal,
+    })
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") throw err
     throw new ApiError(0, "Cannot reach the lanepool server. Check your connection.")
@@ -240,18 +247,35 @@ export const api = {
     removeKey: (id: number) => del(`/providers/surfshark/keys/${id}`),
     setSelection: (body: SurfsharkSelection) => put<SurfsharkProvider>("/providers/surfshark/selection", body),
     locations: () => get<SurfsharkLocation[]>("/providers/surfshark/locations"),
+    account: () => get<SurfsharkAccount>("/providers/surfshark/account"),
+    connectAccount: (body: { email: string; password: string }) =>
+      put<SurfsharkAccount>("/providers/surfshark/account", body),
+    updateAccount: (body: { autoManage?: boolean; lanesPerKey?: number; rotateFailures?: number }) =>
+      patch<SurfsharkAccount>("/providers/surfshark/account", body),
+    disconnectAccount: () => del("/providers/surfshark/account"),
+    generateKeys: (count: number) => post<SurfsharkKey[]>("/providers/surfshark/keys/generate", { count }),
+    rotateKey: (id: number) => post<SurfsharkKey>(`/providers/surfshark/keys/${id}/rotate`),
+    deleteRemoteKey: (id: string) => del(`/providers/surfshark/remote-keys/${enc(id)}`),
   },
   wireguard: {
     list: () => get<WireguardConfig[]>("/providers/wireguard"),
     create: (body: WireguardInput) => post<WireguardConfig>("/providers/wireguard", body),
-    update: (id: number, body: { enabled?: boolean; name?: string; countryCode?: string; city?: string }) =>
-      patch<WireguardConfig>(`/providers/wireguard/${id}`, body),
+    update: (
+      id: number,
+      body: {
+        enabled?: boolean
+        name?: string
+        countryCode?: string
+        city?: string
+      },
+    ) => patch<WireguardConfig>(`/providers/wireguard/${id}`, body),
     remove: (id: number) => del(`/providers/wireguard/${id}`),
   },
   alerts: {
     channels: () => get<AlertChannel[]>("/alerts/channels"),
     createChannel: (body: AlertChannelInput) => post<AlertChannel>("/alerts/channels", body),
-    updateChannel: (id: number, body: Partial<AlertChannelInput>) => patch<AlertChannel>(`/alerts/channels/${id}`, body),
+    updateChannel: (id: number, body: Partial<AlertChannelInput>) =>
+      patch<AlertChannel>(`/alerts/channels/${id}`, body),
     removeChannel: (id: number) => del(`/alerts/channels/${id}`),
     testChannel: (id: number) => post<void>(`/alerts/channels/${id}/test`),
     rules: () => get<AlertRule[]>("/alerts/rules"),
@@ -271,8 +295,8 @@ export const api = {
   },
   tokens: {
     list: () => get<ApiToken[]>("/tokens"),
-    create: (body: { name: string; scopes: TokenScope[]; expiresAt?: string }) => post<CreateTokenResponse>("/tokens", body),
+    create: (body: { name: string; scopes: TokenScope[]; expiresAt?: string }) =>
+      post<CreateTokenResponse>("/tokens", body),
     remove: (id: number) => del(`/tokens/${id}`),
   },
 }
-
