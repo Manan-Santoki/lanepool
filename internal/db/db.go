@@ -16,6 +16,9 @@ import (
 //go:embed migrations/*.sql
 var migrations embed.FS
 
+// Logf reports progress and connection failures while opening the database.
+var Logf = func(format string, args ...any) {}
+
 // Open connects to Postgres and migrates the schema to the latest version.
 func Open(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(url)
@@ -41,11 +44,13 @@ func Open(ctx context.Context, url string) (*pgxpool.Pool, error) {
 		if pool != nil {
 			pool.Close()
 		}
+		Logf("database not reachable yet (attempt %d): %v", attempt+1, err)
 		if attempt >= 30 || ctx.Err() != nil {
 			return nil, fmt.Errorf("connect to database: %w", err)
 		}
 		time.Sleep(time.Second)
 	}
+	Logf("database connected; applying migrations")
 	if err := Migrate(pool); err != nil {
 		pool.Close()
 		return nil, err

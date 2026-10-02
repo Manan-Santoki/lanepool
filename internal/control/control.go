@@ -68,6 +68,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger) (*Server, error) {
 	if cfg.EngineToken == "" {
 		return nil, errors.New("ENGINE_TOKEN is required")
 	}
+	db.Logf = func(format string, args ...any) { log.Info(fmt.Sprintf(format, args...)) }
 	pool, err := db.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
 		return nil, err
@@ -81,6 +82,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger) (*Server, error) {
 		loginsByEmail: newRateLimiter(30, 15*time.Minute),
 	}
 	s.alerting = &alerter{s: s, fired: map[string]time.Time{}}
+	log.Info("database ready; running first-boot checks")
 	if err := s.bootstrap(ctx); err != nil {
 		pool.Close()
 		return nil, err
