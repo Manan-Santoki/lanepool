@@ -39,6 +39,11 @@ type SurfsharkSelection struct {
 	// AllServers makes every server of the matching locations a candidate lane
 	// (each location has many server IPs) and keeps Lanes of them connected.
 	AllServers bool `json:"allServers"`
+	// SpreadKeys spreads lanes across all keys. Off (the default), every lane
+	// uses the first key, as gluetun does: Surfshark accepts one key on many
+	// servers at once, while lanes spread over many keys stopped connecting
+	// once about ten keys were in use at the same time.
+	SpreadKeys bool `json:"spreadKeys"`
 }
 
 func defaultSelection() SurfsharkSelection {

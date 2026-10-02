@@ -482,6 +482,24 @@ function SelectionForm({ selection, canWrite }: { selection: SurfsharkSelection;
           />
         </label>
         <label
+          htmlFor="s-spread-keys"
+          className="flex items-start justify-between gap-4 rounded-md border p-3 md:col-span-2"
+        >
+          <span className="space-y-1">
+            <span className="block text-sm font-medium">Spread lanes across keys</span>
+            <span className="block text-xs text-muted-foreground">
+              Off (recommended): every lane uses your first key, which Surfshark accepts on many servers at once. On:
+              lanes use different keys; Surfshark stops accepting connections once about ten keys are in use at the same
+              time.
+            </span>
+          </span>
+          <Switch
+            id="s-spread-keys"
+            checked={form.spreadKeys}
+            onCheckedChange={(spreadKeys) => setForm((f) => ({ ...f, spreadKeys }))}
+          />
+        </label>
+        <label
           htmlFor="s-virtual"
           className="flex items-start justify-between gap-4 rounded-md border p-3 md:self-start"
         >

@@ -343,6 +343,10 @@ func (s *Server) laneSpecs(ctx context.Context) ([]protocol.LaneSpec, error) {
 	if err != nil {
 		return nil, err
 	}
+	sel, err := s.selection(ctx)
+	if err != nil {
+		return nil, err
+	}
 	var out []protocol.LaneSpec
 	i := 0
 	for _, r := range rows {
@@ -355,10 +359,13 @@ func (s *Server) laneSpecs(ctx context.Context) ([]protocol.LaneSpec, error) {
 			for _, d := range surfshark.DNS {
 				spec.DNS = append(spec.DNS, d.String())
 			}
-			// Spread lanes across keys: lane i starts with key i mod n and may
-			// fall back to the next two. Order changes when keys are added; the
-			// engine keeps lanes on their current key unless it was removed.
-			if n := len(keys); n > 0 {
+			// One key for every lane (the default): spec.Keys is just the first
+			// key. Spread: lane i starts with key i mod n and may fall back to
+			// the next two. Order changes when keys are added; the engine keeps
+			// lanes on their current key unless it was removed.
+			if n := len(keys); n > 0 && !sel.SpreadKeys {
+				spec.Keys = keys[:1]
+			} else if n > 0 {
 				for k := 0; k < min(n, maxKeysPerLane); k++ {
 					spec.Keys = append(spec.Keys, keys[(i+k)%n])
 				}

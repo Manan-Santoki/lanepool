@@ -78,7 +78,7 @@ export interface SurfsharkAccount {
   connected: boolean; email: string; autoManage: boolean; lanesPerKey: number; rotateFailures: number;
   lastError?: string; lastSyncAt?: string | null; remoteKeys?: SurfsharkRemoteKey[]
 }
-export interface SurfsharkSelection { lanes: number; countries: string[]; excludeCountries: string[]; locations: string[]; excludeLocations: string[]; includeVirtual: boolean; allServers: boolean }
+export interface SurfsharkSelection { lanes: number; countries: string[]; excludeCountries: string[]; locations: string[]; excludeLocations: string[]; includeVirtual: boolean; allServers: boolean; spreadKeys: boolean }
 export interface SurfsharkProvider { keys: SurfsharkKey[]; selection: SurfsharkSelection; serverCount: number; lastFetchedAt?: string; fetchError?: string }
 export interface SurfsharkLocation { id: string; country: string; countryCode: string; city: string; virtual: boolean; load: number }
 export interface WireguardConfig { id: number; name: string; countryCode: string; city: string; endpoint: string; enabled: boolean; createdAt: string }

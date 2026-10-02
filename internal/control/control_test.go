@@ -387,7 +387,7 @@ func TestSurfsharkSelectionAndKeys(t *testing.T) {
 	st.call(st.client, "POST", "/api/providers/surfshark/keys", map[string]string{"privateKey": k2}, nil)
 
 	var prov map[string]any
-	if code := st.call(st.client, "PUT", "/api/providers/surfshark/selection", map[string]any{"lanes": 2, "countries": []string{"DE"}, "includeVirtual": true}, &prov); code != 200 {
+	if code := st.call(st.client, "PUT", "/api/providers/surfshark/selection", map[string]any{"lanes": 2, "countries": []string{"DE"}, "includeVirtual": true, "spreadKeys": true}, &prov); code != 200 {
 		t.Fatalf("selection: %d", code)
 	}
 	var lanes []Lane
@@ -406,6 +406,17 @@ func TestSurfsharkSelectionAndKeys(t *testing.T) {
 	if cfg.Lanes[0].Keys[0].PrivateKey != k1 || cfg.Lanes[0].Endpoint != "de-ber.prod.surfshark.com:51820" {
 		t.Fatalf("lane spec %+v", cfg.Lanes[0])
 	}
+	// Default (spreadKeys off): every lane uses the first key only, like gluetun.
+	st.call(st.client, "PUT", "/api/providers/surfshark/selection", map[string]any{"lanes": 2, "countries": []string{"DE"}, "includeVirtual": true}, nil)
+	if cfg, err = st.srv.buildEngineConfig(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range cfg.Lanes {
+		if len(l.Keys) != 1 || l.Keys[0].PrivateKey != k1 {
+			t.Fatalf("single-key lanes: %+v", cfg.Lanes)
+		}
+	}
+	st.call(st.client, "PUT", "/api/providers/surfshark/selection", map[string]any{"lanes": 2, "countries": []string{"DE"}, "includeVirtual": true, "spreadKeys": true}, nil)
 	// Keys are encrypted at rest.
 	var enc []byte
 	st.srv.db.QueryRow(context.Background(), `SELECT private_key_enc FROM provider_keys LIMIT 1`).Scan(&enc)
@@ -508,7 +519,7 @@ func TestSurfsharkServerPool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Settings.TargetUp != 2 || len(cfg.Lanes) != 3 || cfg.Lanes[1].Endpoint != "192.0.2.1:51820" || len(cfg.Lanes[0].Keys) != maxKeysPerLane {
+	if cfg.Settings.TargetUp != 2 || len(cfg.Lanes) != 3 || cfg.Lanes[1].Endpoint != "192.0.2.1:51820" || len(cfg.Lanes[0].Keys) != 1 || cfg.Lanes[0].Keys[0].ID != cfg.Lanes[2].Keys[0].ID {
 		t.Fatalf("engine config: target %d, %+v", cfg.Settings.TargetUp, cfg.Lanes)
 	}
 	// Removing one server switches it off; its location stays in the pool.
