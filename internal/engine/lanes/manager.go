@@ -8,6 +8,7 @@
 //   - starts lanes one at a time (at most MaxConnecting at once, LaneStartDelay apart),
 //   - switches a lane off when it can't connect and retries later with the next key,
 //   - stops opening new sessions for BreakerPause after BreakerFailures failures in a row,
+//     then probes with a single lane; each failed probe doubles the pause (up to 4×),
 //   - never restarts a working lane unless its configuration changed or an admin asks.
 package lanes
 
@@ -88,6 +89,7 @@ type Manager struct {
 	nextLaunch  time.Time
 	pausedUntil time.Time
 	failures    int
+	trips       int // breaker openings since the last lane came up
 	events      []protocol.Event
 }
 
@@ -133,6 +135,7 @@ func (m *Manager) Apply(settings protocol.EngineSettings, specs []protocol.LaneS
 			if l.status != protocol.LaneBackoff {
 				l.status = protocol.LaneQueued
 				l.nextStart = time.Time{}
+				l.lastError = ""
 			}
 		default:
 			// Same peer and the current key is still allowed: keep the tunnel and
@@ -232,6 +235,7 @@ func (m *Manager) Tick(ctx context.Context) {
 			l.retryBackoff = 0
 			l.nextIPCheck = now
 			m.failures = 0
+			m.trips = 0
 			m.event("info", protocol.EventLaneUp, l.spec.ID, fmt.Sprintf("connected with key %d", l.keyID()))
 		case fresh:
 			l.lastUp = now
@@ -267,6 +271,10 @@ func (m *Manager) launch(ctx context.Context, now time.Time) {
 	if now.Before(m.pausedUntil) || now.Before(m.nextLaunch) {
 		return
 	}
+	limit := max(1, s.MaxConnecting)
+	if m.trips > 0 {
+		limit = 1 // half-open breaker: probe with one lane until something connects
+	}
 	connecting := 0
 	var due []*lane
 	for _, id := range m.order {
@@ -280,7 +288,7 @@ func (m *Manager) launch(ctx context.Context, now time.Time) {
 	}
 	sort.SliceStable(due, func(i, j int) bool { return due[i].nextStart.Before(due[j].nextStart) })
 	for _, l := range due {
-		if connecting >= max(1, s.MaxConnecting) {
+		if connecting >= limit {
 			return
 		}
 		m.startLane(ctx, l, now)
@@ -299,6 +307,7 @@ func (m *Manager) startLane(ctx context.Context, l *lane, now time.Time) {
 	l.status = protocol.LaneConnecting
 	l.started = now
 	l.lastUp = time.Time{}
+	l.lastError = ""
 	cfg, err := tunnelConfig(l.spec, l.spec.Keys[l.keyIdx].PrivateKey)
 	if err != nil {
 		l.lastError = err.Error()
@@ -374,12 +383,18 @@ func (m *Manager) park(l *lane, now time.Time) {
 	m.event("warn", protocol.EventLaneBackoff, l.spec.ID, msg)
 
 	m.failures++
-	if s.BreakerFailures > 0 && m.failures >= s.BreakerFailures && s.BreakerPause > 0 {
-		m.pausedUntil = now.Add(sec(s.BreakerPause))
+	// After a pause, a single failed probe reopens the breaker: the provider is
+	// most likely still refusing this IP, and more attempts only extend that.
+	if s.BreakerFailures > 0 && s.BreakerPause > 0 && (m.failures >= s.BreakerFailures || m.trips > 0) {
+		pause := sec(s.BreakerPause) << min(m.trips, 2)
+		m.pausedUntil = now.Add(pause)
 		m.failures = 0
-		m.event("warn", protocol.EventBreakerOpen, "", fmt.Sprintf(
-			"%d lanes failed to connect in a row; no new connections for %s",
-			s.BreakerFailures, sec(s.BreakerPause)))
+		m.trips++
+		msg := fmt.Sprintf("%d lanes failed to connect in a row; no new connections for %s", s.BreakerFailures, pause)
+		if m.trips > 1 {
+			msg = fmt.Sprintf("probe lane failed to connect; no new connections for %s", pause)
+		}
+		m.event("warn", protocol.EventBreakerOpen, "", msg)
 	}
 }
 
@@ -414,6 +429,7 @@ func (m *Manager) Restart(id string) error {
 	l.status = protocol.LaneQueued
 	l.nextStart = time.Time{}
 	l.retryBackoff = 0
+	l.lastError = ""
 	l.restarts++
 	m.pausedUntil = time.Time{}
 	m.nextLaunch = time.Time{}
@@ -432,9 +448,11 @@ func (m *Manager) RestartAll() {
 		l.status = protocol.LaneQueued
 		l.nextStart = time.Time{}
 		l.retryBackoff = 0
+		l.lastError = ""
 		l.restarts++
 	}
 	m.pausedUntil = time.Time{}
+	m.trips = 0
 }
 
 // PausedUntil reports when the circuit breaker closes again (zero if it isn't open).
@@ -499,6 +517,7 @@ func (m *Manager) States() []protocol.LaneState {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]protocol.LaneState, 0, len(m.order))
+	paused := m.now().Before(m.pausedUntil)
 	for _, id := range m.order {
 		l := m.lanes[id]
 		st := protocol.LaneState{
@@ -514,9 +533,16 @@ func (m *Manager) States() []protocol.LaneState {
 				st.LastHandshake = &hs
 			}
 		}
-		if l.status == protocol.LaneBackoff {
-			ns := l.nextStart
+		switch {
+		case l.status == protocol.LaneBackoff:
+			ns := maxTime(l.nextStart, m.pausedUntil)
 			st.NextRetry = &ns
+		case l.status == protocol.LaneQueued && paused:
+			ns := m.pausedUntil
+			st.NextRetry = &ns
+			if st.LastError == "" {
+				st.LastError = "waiting: new connections paused by the circuit breaker"
+			}
 		}
 		out = append(out, st)
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -240,4 +241,64 @@ func TestRestartReconnects(t *testing.T) {
 		s := state(m, "a")
 		return s.Status == protocol.LaneUp && s.Restarts == 1
 	})
+}
+
+func TestBreakerProbesWithOneLaneAfterPause(t *testing.T) {
+	s := testSettings()
+	s.MaxConnecting = 3
+	s.BreakerFailures = 2
+	s.BreakerPause = 1
+	s.ConnectTimeout = 1
+
+	var specs []protocol.LaneSpec
+	for i := 0; i < 6; i++ {
+		priv, _ := wgtest.KeyPair()
+		_, otherPub := wgtest.KeyPair()
+		p := wgtest.Start(t, "203.0.113.9", otherPub) // never accepts us
+		specs = append(specs, laneFor(fmt.Sprintf("dead%d", i), p, priv))
+	}
+	m := New(s, nil)
+	m.Apply(s, specs)
+	run(t, m)
+
+	var events []protocol.Event
+	opened := func() int {
+		events = append(events, m.DrainEvents()...)
+		n := 0
+		for _, e := range events {
+			if e.Type == protocol.EventBreakerOpen {
+				n++
+			}
+		}
+		return n
+	}
+	waitFor(t, 10*time.Second, "breaker to open", func() bool { return opened() >= 1 })
+	peak := 0
+	waitFor(t, 15*time.Second, "failed probe to reopen the breaker", func() bool {
+		n := 0
+		for _, st := range m.States() {
+			if st.Status == protocol.LaneConnecting {
+				n++
+			}
+		}
+		peak = max(peak, n)
+		return opened() >= 2
+	})
+	if peak > 1 {
+		t.Fatalf("%d lanes connecting while probing; want 1", peak)
+	}
+	last := events[len(events)-1]
+	for _, e := range events {
+		if e.Type == protocol.EventBreakerOpen {
+			last = e
+		}
+	}
+	if want := "no new connections for 2s"; !strings.Contains(last.Message, want) {
+		t.Fatalf("second breaker event %q, want %q", last.Message, want)
+	}
+	for _, st := range m.States() {
+		if st.Status == protocol.LaneQueued && (st.NextRetry == nil || st.LastError == "") {
+			t.Fatalf("queued lane during pause lacks retry info: %+v", st)
+		}
+	}
 }
