@@ -24,9 +24,10 @@ services:
       interval: 5s
       retries: 20
     networks:
-      default:
-        # A unique name: control is also on dokploy-network, where a plain "db"
-        # can resolve to another project's database.
+      # Everything is on dokploy-network: on busy Dokploy hosts the per-project
+      # bridge network has been seen dropping traffic between containers. The
+      # unique alias keeps "db" from resolving to another project's database.
+      dokploy-network:
         aliases: [lanepool-db]
 
   control:
@@ -60,7 +61,6 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
     networks:
-      default:
       dokploy-network:
         aliases: [lanepool-control]
 
