@@ -1,0 +1,42 @@
+# lanepool engine on another machine (e.g. a home server), controlled by a
+# control service elsewhere.
+#
+# Lanes connect from this machine's IP, so use it when the control host's IP is
+# throttled by the VPN provider. Run only one engine per lane set: two engines
+# would open every lane twice.
+#
+#   cp deploy/remote-engine.env.example .env   # then fill it in
+#   docker compose -f deploy/remote-engine.yml --env-file .env up -d --build
+#
+# Environment:
+#   CONTROL_URL       public URL of control, e.g. https://lanepool.example.com
+#   ENGINE_TOKEN      same value as the control service
+#   API_BIND          address for the engine API (control calls it), e.g. a
+#                     Tailscale IP; set ENGINE_URL on control to http://API_BIND:9090
+#   PROXY_BIND        address for the proxy port (default 0.0.0.0)
+#   TRUSTED_PROXIES   addresses allowed to send PROXY protocol headers, e.g. the
+#                     Tailscale IP of the host running Traefik for the public proxy
+services:
+  engine:
+    build:
+      context: ..
+    image: lanepool:engine
+    command: engine
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      CONTROL_URL: ${CONTROL_URL:?set CONTROL_URL}
+      ENGINE_TOKEN: ${ENGINE_TOKEN:?set ENGINE_TOKEN}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+      NODE_ID: ${NODE_ID:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - ${PROXY_BIND:-0.0.0.0}:8080:8080
+      - ${API_BIND:?set API_BIND}:9090:9090
+    ulimits:
+      nofile: { soft: 65536, hard: 65536 }
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
