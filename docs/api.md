@@ -154,7 +154,7 @@ interface TopItem { key: string; label: string; bytes: number; connections: numb
 | GET | /api/lanes | | `Lane[]` |
 | PATCH | /api/lanes/:id | `{ enabled }` | `Lane` |
 | POST | /api/lanes/:id/restart | | `202` |
-| POST | /api/lanes/restart-all | | `202` (lanes reconnect one at a time) |
+| POST | /api/lanes/restart-all | | `202` (lanes queue for reconnection; pool startup/fallback progress is preserved) |
 | GET | /api/lanes/random?country=us | | `Lane` (a random healthy lane) |
 | POST | /api/lanes/add | `{ locations: string[] }` (Surfshark location IDs) | `Lane[]`; pins the locations, un-removes them and raises the lane count so no existing lane is displaced |
 | DELETE | /api/lanes/:id | | `204`; Surfshark: unpins, adds to `excludeLocations`, lowers the count. WireGuard: deletes the config |
