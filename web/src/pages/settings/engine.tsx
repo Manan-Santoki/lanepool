@@ -30,8 +30,8 @@ interface NumField {
 }
 
 const PACING: NumField[] = [
-  { key: "laneStartDelay", label: "Delay between lane starts", unit: "seconds", help: "Wait this long before starting the next lane." },
-  { key: "maxConnecting", label: "Max lanes connecting at once", unit: "count", min: 1, help: "How many lanes may handshake at the same time." },
+  { key: "laneStartDelay", label: "Delay between lane starts", unit: "seconds", help: "Wait this long before starting the next lane. Server pools always wait at least 60 seconds, including after a failed attempt." },
+  { key: "maxConnecting", label: "Max lanes connecting at once", unit: "count", min: 1, help: "How many lanes may handshake at the same time. Server pools always connect one lane at a time." },
   { key: "connectTimeout", label: "Connect timeout", unit: "seconds", help: "Give up on a lane's handshake after this long and retry later." },
   { key: "retryBackoff", label: "Retry backoff", unit: "seconds", help: "First wait before retrying a failed lane. Doubles on every consecutive failure." },
   { key: "retryBackoffMax", label: "Max retry backoff", unit: "seconds", help: "Upper limit for the doubling backoff." },
@@ -39,7 +39,7 @@ const PACING: NumField[] = [
     key: "breakerFailures",
     label: "Circuit breaker failures",
     unit: "count",
-    help: "This many lane failures in a row pause all new lane connections (the provider is probably blocking you).",
+    help: "Pause new lane connections after this many failures. Server pools count failures across all candidates and keys within at least 15 minutes, even when other attempts succeed. 0 = off.",
   },
   { key: "breakerPause", label: "Circuit breaker pause", unit: "seconds", help: "How long new lane connections stay paused once the breaker opens." },
   {
@@ -51,7 +51,7 @@ const PACING: NumField[] = [
 ]
 
 const HEALTH: NumField[] = [
-  { key: "ipCheckInterval", label: "IP check interval", unit: "seconds", help: "How often each lane re-checks its exit IP and latency." },
+  { key: "ipCheckInterval", label: "IP check interval", unit: "seconds", help: "How often each lane re-checks its exit IP and latency. Server pools look up each tunnel only once, with no repeated probes or lookup retries. 0 = no lookups." },
 ]
 
 const TIMEOUTS: NumField[] = [
@@ -300,7 +300,7 @@ function EngineForm({ engine }: { engine: EngineSettings }) {
         </Group>
 
         <div className="grid gap-4 lg:grid-cols-2">
-          <Group title="Health checks" description="Each lane periodically fetches this URL through its tunnel to learn its exit IP and latency.">
+          <Group title="Exit IP lookups" description="Fetch this URL through a tunnel to learn its exit IP and latency. Server pools use one lookup per tunnel and passive WireGuard handshakes to monitor connectivity.">
             <div className="space-y-5">
               <FormField
                 label="IP check URL"

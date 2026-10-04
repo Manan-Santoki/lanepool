@@ -27,7 +27,18 @@ your apps ─► lanepool proxy ──┼─► lane de-fra ─► 185.x.x.x    
   open many sessions at once.)
 - **Server pool:** optionally every Surfshark server becomes a candidate lane
   (each location has many server IPs, found through DNS). lanepool keeps a set
-  number connected and, when a server doesn't connect, moves on to the next one.
+  number connected and leaves the rest on standby. In pool mode only one lane
+  connects at a time, with at least 60 s between attempts and after a failure.
+  Failures across all candidates and keys share a rolling window of at least
+  15 minutes (or the circuit-breaker pause, if longer); isolated successes don't
+  clear it. The configured circuit breaker pauses new attempts while working
+  tunnels keep running, then tries one probe. Restart commands keep this budget.
+  Previously working backups are preferred when available. The dashboard shows
+  connected lanes against the target, with the candidate count separately.
+  Pool exit-IP/latency lookups run once per tunnel when enabled, with no retries
+  or periodic probes; WireGuard handshakes monitor connectivity. Setting the IP
+  check interval to 0 disables lookups entirely. A fresh handshake does not
+  guarantee access to every destination.
 - **Proxy users** with:
   - allowed countries and lanes
   - sticky sessions
@@ -158,8 +169,10 @@ The full API is documented in [`docs/api.md`](docs/api.md).
   all of them, and IP rotation doesn't hide cookies or browser fingerprints.
 - **Pacing matters.** Providers limit how fast an account or IP may open new
   WireGuard sessions. Opening many at once can get your server's IP refused for
-  hours. Keep the defaults (one new lane every 10 s, at most 2 connecting) and
-  avoid restarting all lanes repeatedly.
+  hours. Outside pool mode the defaults are one new lane every 10 s and at most
+  2 connecting; pool mode enforces one at a time and at least 60 s between
+  attempts. A target of 30 can take about 30 minutes to fill even without
+  failures. Avoid restarting all lanes repeatedly.
 - **WireGuard has no disconnect.** After a restart, old sessions still count on
   the provider's side for a while.
 - **Use it responsibly:** respect the terms of the sites you access and of your

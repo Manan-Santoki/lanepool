@@ -6,10 +6,12 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Manan-Santoki/lanepool/internal/protocol"
+	"github.com/Manan-Santoki/lanepool/internal/wg"
 	"github.com/Manan-Santoki/lanepool/internal/wg/wgtest"
 )
 
@@ -303,62 +305,321 @@ func TestBreakerProbesWithOneLaneAfterPause(t *testing.T) {
 	}
 }
 
+// Pool tests use a controlled clock: production pacing must remain enforced even
+// when settings ask for immediate parallel starts.
+type poolTunnel struct {
+	now     func() time.Time
+	healthy atomic.Bool
+	closed  atomic.Bool
+	dials   atomic.Int64
+}
+
+func (t *poolTunnel) Stats() wg.Stats {
+	if t.healthy.Load() && !t.closed.Load() {
+		return wg.Stats{LastHandshake: t.now()}
+	}
+	return wg.Stats{}
+}
+func (t *poolTunnel) Close() { t.closed.Store(true) }
+func (t *poolTunnel) DialContext(context.Context, string, string) (net.Conn, error) {
+	t.dials.Add(1)
+	return nil, fmt.Errorf("test destination unavailable")
+}
+
+type poolHarness struct {
+	m      *Manager
+	clock  atomic.Int64
+	starts atomic.Int64
+}
+
+func newPoolHarness(t *testing.T, s protocol.EngineSettings, specs []protocol.LaneSpec) *poolHarness {
+	t.Helper()
+	h := &poolHarness{}
+	h.clock.Store(time.Now().UnixNano())
+	now := func() time.Time { return time.Unix(0, h.clock.Load()) }
+	h.m = New(s, func(_ context.Context, cfg wg.Config) (Tunnel, error) {
+		h.starts.Add(1)
+		tun := &poolTunnel{now: now}
+		tun.healthy.Store(!strings.HasPrefix(cfg.Endpoint, "dead"))
+		return tun, nil
+	})
+	h.m.now = now
+	h.m.Apply(s, specs)
+	t.Cleanup(func() {
+		h.m.mu.Lock()
+		defer h.m.mu.Unlock()
+		for _, l := range h.m.lanes {
+			h.m.stop(l)
+		}
+	})
+	return h
+}
+
+func poolSpecs(ids ...string) []protocol.LaneSpec {
+	var specs []protocol.LaneSpec
+	for _, id := range ids {
+		specs = append(specs, protocol.LaneSpec{ID: id, Enabled: true, Endpoint: id + ":51820",
+			Addresses: []string{"10.0.0.2"}, Keys: []protocol.LaneKey{{ID: 1, PrivateKey: "test"}}})
+	}
+	return specs
+}
+
+func (h *poolHarness) tick(t *testing.T, advance time.Duration) {
+	t.Helper()
+	h.clock.Add(int64(advance))
+	h.m.Tick(context.Background())
+	waitFor(t, time.Second, "tunnel start to finish", func() bool {
+		h.m.mu.Lock()
+		defer h.m.mu.Unlock()
+		for _, l := range h.m.lanes {
+			if l.status == protocol.LaneConnecting && l.tun == nil {
+				return false
+			}
+		}
+		return true
+	})
+	h.m.Tick(context.Background())
+}
+
 func TestPoolKeepsTargetUpAndSkipsFailingServers(t *testing.T) {
 	s := testSettings()
 	s.TargetUp = 2
-	s.MaxConnecting = 2
-	s.ConnectTimeout = 1
-	s.RetryBackoff = 60
-	s.RetryBackoffMax = 60
-
-	priv, pub := wgtest.KeyPair()
-	var specs []protocol.LaneSpec
-	// Two dead servers first, then three that work.
-	for i := 0; i < 2; i++ {
-		_, otherPub := wgtest.KeyPair()
-		specs = append(specs, laneFor(fmt.Sprintf("dead%d", i), wgtest.Start(t, "203.0.113.9", otherPub), priv))
+	s.IPCheckInterval = 0
+	s.RetryBackoff = 3600
+	s.RetryBackoffMax = 3600
+	specs := poolSpecs("dead0", "dead1", "ok0", "ok1", "ok2")
+	h := newPoolHarness(t, s, specs)
+	h.tick(t, 0)
+	h.tick(t, 3*time.Second) // first handshake times out
+	h.tick(t, time.Minute)
+	h.tick(t, 3*time.Second) // second handshake times out
+	h.tick(t, time.Minute)
+	h.tick(t, time.Minute)
+	if len(h.m.Usable()) != 2 || h.starts.Load() != 4 {
+		t.Fatalf("usable=%+v starts=%d", h.m.Usable(), h.starts.Load())
 	}
-	for i := 0; i < 3; i++ {
-		specs = append(specs, laneFor(fmt.Sprintf("ok%d", i), wgtest.Start(t, fmt.Sprintf("203.0.113.%d", 20+i), pub), priv))
+	h.tick(t, time.Hour)
+	if h.starts.Load() != 4 || state(h.m, "ok2").Status != "" {
+		t.Fatal("full pool started a standby or retry lane")
 	}
-	m := New(s, nil)
-	m.Apply(s, specs)
-	run(t, m)
-
-	count := func() (up, connecting, backoff int) {
-		for _, st := range m.States() {
-			switch st.Status {
-			case protocol.LaneUp:
-				up++
-			case protocol.LaneConnecting:
-				connecting++
-			case protocol.LaneBackoff:
-				backoff++
-			}
-		}
-		return
-	}
-	waitFor(t, 10*time.Second, "two lanes up after skipping the dead servers", func() bool {
-		up, connecting, _ := count()
-		if up+connecting > 2 {
-			t.Fatalf("%d lanes up or connecting; target is 2", up+connecting)
-		}
-		return up == 2
-	})
-	time.Sleep(500 * time.Millisecond)
-	up, _, backoff := count()
-	if up != 2 || backoff != 2 {
-		t.Fatalf("up=%d backoff=%d, want 2 and 2: %+v", up, backoff, m.States())
-	}
-	if len(m.States()) != 5 {
-		// ok2 never started: it is standby and not reported.
-		if st := state(m, "ok2"); st.Status != "" {
-			t.Fatalf("standby lane reported: %+v", st)
-		}
-	}
-
-	// Lowering the target closes the surplus lane.
 	s.TargetUp = 1
-	m.Apply(s, specs)
-	waitFor(t, 3*time.Second, "pool trimmed to one lane", func() bool { up, _, _ := count(); return up == 1 })
+	h.m.Apply(s, specs)
+	h.tick(t, 0)
+	if len(h.m.Usable()) != 1 {
+		t.Fatal("pool did not trim to its new target")
+	}
+}
+
+func TestPoolSerializesAndPacesAllCandidatesAndKeys(t *testing.T) {
+	s := testSettings()
+	s.TargetUp = 30
+	s.IPCheckInterval = 0
+	specs := poolSpecs("dead0", "ok1", "ok2")
+	specs[1].Keys[0].ID = 45
+	h := newPoolHarness(t, s, specs)
+	h.tick(t, 0)
+	h.tick(t, time.Second)
+	if h.starts.Load() != 1 {
+		t.Fatal("started overlapping handshakes")
+	}
+	h.tick(t, 2*time.Second) // failed attempt reserves a fresh shared minute
+	h.m.Apply(s, specs)      // reloading config must not reset the budget
+	h.tick(t, time.Minute-time.Second)
+	if h.starts.Load() != 1 {
+		t.Fatal("another server/key bypassed the failure cooldown")
+	}
+	h.tick(t, time.Second)
+	if h.starts.Load() != 2 || len(h.m.Usable()) != 1 {
+		t.Fatal("eligible replacement did not start")
+	}
+	h.tick(t, time.Minute-time.Second)
+	if h.starts.Load() != 2 {
+		t.Fatal("success bypassed the shared start interval")
+	}
+	h.tick(t, time.Second)
+	if h.starts.Load() != 3 {
+		t.Fatal("pool failed to continue filling")
+	}
+}
+
+func TestPoolFailureBudgetSurvivesSuccessAndPreservesHealthyTunnels(t *testing.T) {
+	s := testSettings()
+	s.TargetUp = 30
+	s.IPCheckInterval = 0
+	s.BreakerFailures = 2
+	s.BreakerPause = 900
+	s.RetryBackoff = 3600
+	s.RetryBackoffMax = 3600
+	h := newPoolHarness(t, s, poolSpecs("dead0", "ok1", "dead2", "dead3", "ok4"))
+	h.tick(t, 0)
+	h.tick(t, 3*time.Second)
+	h.tick(t, time.Minute) // a success between the two failures
+	healthy := h.m.lanes["ok1"].tun.(*poolTunnel)
+	h.tick(t, time.Minute)
+	h.tick(t, 3*time.Second)
+	if h.m.PausedUntil().IsZero() {
+		t.Fatal("intermittent success erased pool failures")
+	}
+	if healthy.closed.Load() || len(h.m.Usable()) != 1 {
+		t.Fatal("breaker disrupted a healthy tunnel")
+	}
+	if err := h.m.Restart("dead0"); err != nil {
+		t.Fatal(err)
+	}
+	h.tick(t, 899*time.Second)
+	if h.starts.Load() != 3 {
+		t.Fatal("manual restart bypassed pool cooldown")
+	}
+	h.tick(t, time.Second) // exactly one half-open probe
+	if h.starts.Load() != 4 {
+		t.Fatal("missing half-open probe")
+	}
+	h.tick(t, 3*time.Second)
+	if pause := h.m.PausedUntil().Sub(h.m.now()); pause != 1800*time.Second {
+		t.Fatalf("failed probe pause=%s, want 30m", pause)
+	}
+	if healthy.closed.Load() {
+		t.Fatal("failed probe closed a healthy tunnel")
+	}
+}
+
+func TestPoolProbeSuccessRestoresBudget(t *testing.T) {
+	s := testSettings()
+	s.TargetUp = 2
+	s.IPCheckInterval = 0
+	s.BreakerFailures = 1
+	s.BreakerPause = 900
+	s.RetryBackoff = 3600
+	s.RetryBackoffMax = 3600
+	h := newPoolHarness(t, s, poolSpecs("dead0", "ok1", "ok2"))
+	h.tick(t, 0)
+	h.tick(t, 3*time.Second)
+	h.tick(t, 900*time.Second)
+	if h.m.trips != 0 || len(h.m.poolFailures) != 0 || len(h.m.Usable()) != 1 {
+		t.Fatal("successful probe did not restore pool budget")
+	}
+	h.tick(t, time.Minute)
+	if len(h.m.Usable()) != 2 {
+		t.Fatal("pool did not resume filling after successful probe")
+	}
+}
+
+func TestPoolFailureWindowExpires(t *testing.T) {
+	s := testSettings()
+	s.TargetUp = 3
+	s.IPCheckInterval = 0
+	s.BreakerFailures = 2
+	s.BreakerPause = 900
+	s.RetryBackoff = 3600
+	s.RetryBackoffMax = 3600
+	h := newPoolHarness(t, s, poolSpecs("dead0", "dead1", "ok2"))
+	h.tick(t, 0)
+	h.tick(t, 3*time.Second)
+	h.tick(t, 901*time.Second)
+	h.tick(t, 3*time.Second)
+	if !h.m.PausedUntil().IsZero() || len(h.m.poolFailures) != 1 {
+		t.Fatal("expired failures counted against the current pool budget")
+	}
+}
+
+func TestPoolIPLookupIsOncePerTunnelEvenOnFailure(t *testing.T) {
+	s := testSettings()
+	s.TargetUp = 1
+	h := newPoolHarness(t, s, poolSpecs("ok0"))
+	h.tick(t, 0)
+	tun := h.m.lanes["ok0"].tun.(*poolTunnel)
+	waitFor(t, time.Second, "initial IP lookup", func() bool {
+		h.m.mu.Lock()
+		defer h.m.mu.Unlock()
+		return !h.m.lanes["ok0"].checking && tun.dials.Load() == 1
+	})
+	h.tick(t, 24*time.Hour)
+	if tun.dials.Load() != 1 || tun.closed.Load() {
+		t.Fatal("pool repeated synthetic probes or restarted a healthy tunnel")
+	}
+}
+
+func TestPoolPrefersPreviouslyWorkingBackup(t *testing.T) {
+	s := testSettings()
+	s.TargetUp = 2
+	s.IPCheckInterval = 0
+	specs := poolSpecs("ok0", "ok1", "ok2")
+	h := newPoolHarness(t, s, specs)
+	h.tick(t, 0)
+	h.tick(t, time.Minute)
+	s.TargetUp = 1
+	h.m.Apply(s, specs)
+	h.tick(t, 0) // ok1 becomes a disconnected, previously working backup
+	h.m.mu.Lock()
+	tun := h.m.lanes["ok0"].tun.(*poolTunnel)
+	tun.healthy.Store(false)
+	h.m.mu.Unlock()
+	h.tick(t, 181*time.Second)
+	h.tick(t, 3*time.Second)
+	h.tick(t, time.Minute)
+	if state(h.m, "ok1").Status != protocol.LaneUp || state(h.m, "ok2").Status != "" {
+		t.Fatal("pool preferred an unproven candidate over its working backup")
+	}
+}
+
+func TestPoolInvalidConfigCannotBypassBudget(t *testing.T) {
+	s := testSettings()
+	s.TargetUp = 30
+	s.IPCheckInterval = 0
+	s.BreakerFailures = 2
+	s.BreakerPause = 900
+	specs := poolSpecs("bad0", "ok1")
+	specs[0].Addresses = []string{"invalid"}
+	h := newPoolHarness(t, s, specs)
+	h.tick(t, 0)
+	if state(h.m, "bad0").Status != protocol.LaneBackoff || h.starts.Load() != 0 {
+		t.Fatal("invalid lane did not fail before tunnel startup")
+	}
+	h.tick(t, time.Minute-time.Second)
+	if h.starts.Load() != 0 {
+		t.Fatal("invalid configuration bypassed the shared interval")
+	}
+	h.tick(t, time.Second)
+	if h.starts.Load() != 1 || len(h.m.Usable()) != 1 {
+		t.Fatal("valid replacement did not start after cooldown")
+	}
+}
+
+func TestPoolRestartAllKeepsFailureBudget(t *testing.T) {
+	s := testSettings()
+	s.TargetUp = 30
+	s.IPCheckInterval = 0
+	s.BreakerFailures = 1
+	s.BreakerPause = 900
+	h := newPoolHarness(t, s, poolSpecs("dead0", "ok1"))
+	h.tick(t, 0)
+	h.tick(t, 3*time.Second)
+	before := h.m.PausedUntil()
+	h.m.RestartAll()
+	h.tick(t, 899*time.Second)
+	if h.starts.Load() != 1 || h.m.PausedUntil() != before || h.m.trips != 1 {
+		t.Fatal("restart-all bypassed the shared breaker")
+	}
+}
+
+func TestPoolLateSuccessCannotResetAnOpenBreaker(t *testing.T) {
+	s := testSettings()
+	s.TargetUp = 30
+	s.IPCheckInterval = 0
+	h := newPoolHarness(t, s, poolSpecs("ok0", "ok1"))
+	// A connection started before the breaker opened can finish during the
+	// cooldown (for example, after switching from non-pool parallel starts).
+	h.m.mu.Lock()
+	l := h.m.lanes["ok0"]
+	tun := &poolTunnel{now: h.m.now}
+	tun.healthy.Store(true)
+	l.tun, l.status, l.started = tun, protocol.LaneConnecting, h.m.now()
+	h.m.trips = 1
+	h.m.poolFailures = []time.Time{h.m.now()}
+	h.m.pausedUntil = h.m.now().Add(15 * time.Minute)
+	h.m.mu.Unlock()
+	h.tick(t, time.Minute)
+	if len(h.m.Usable()) != 1 || h.m.trips != 1 || len(h.m.poolFailures) != 1 || h.starts.Load() != 0 {
+		t.Fatal("late success bypassed the open pool breaker")
+	}
 }

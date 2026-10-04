@@ -471,8 +471,8 @@ function SelectionForm({ selection, canWrite }: { selection: SurfsharkSelection;
             <span className="block text-sm font-medium">Use every server (server pool)</span>
             <span className="block text-xs text-muted-foreground">
               Each location has many servers with their own IPs. With this on, every server of the matching locations is
-              a candidate and lanepool keeps the number of lanes above connected: when a server doesn’t connect, it
-              moves on to the next one instead of waiting.
+              a candidate and lanepool works toward the connection target above. Attempts run one at a time, at
+              least a minute apart. Repeated failures pause new attempts while working tunnels stay connected.
             </span>
           </span>
           <Switch

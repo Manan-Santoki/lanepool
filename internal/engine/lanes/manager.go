@@ -14,6 +14,8 @@
 // With TargetUp set, the lanes are a pool of candidate servers: the manager keeps
 // TargetUp of them up and leaves the rest on standby. When a lane fails, it backs
 // off and the next untried candidate starts in its place.
+// Pool attempts share a one-minute minimum interval and a rolling failure
+// budget: an occasional success must not hide throttling across many candidates.
 package lanes
 
 import (
@@ -52,6 +54,11 @@ func DefaultStart(ctx context.Context, cfg wg.Config) (Tunnel, error) {
 // ErrNoLane is returned when a lane isn't available for dialing.
 var ErrNoLane = errors.New("lane not available")
 
+const (
+	poolStartInterval = time.Minute
+	poolFailureWindow = 15 * time.Minute
+)
+
 type lane struct {
 	spec    protocol.LaneSpec
 	tun     Tunnel
@@ -60,6 +67,7 @@ type lane struct {
 	keyIdx  int
 	started time.Time
 	lastUp  time.Time
+	wasUp   bool
 	exitIP  string
 	latency time.Duration
 
@@ -69,6 +77,7 @@ type lane struct {
 	lastError    string
 	nextIPCheck  time.Time
 	checking     bool
+	ipChecked    bool
 	active       atomic.Int64
 }
 
@@ -86,15 +95,16 @@ type Manager struct {
 	start StartFunc
 	now   func() time.Time
 
-	mu          sync.Mutex
-	settings    protocol.EngineSettings
-	lanes       map[string]*lane
-	order       []string
-	nextLaunch  time.Time
-	pausedUntil time.Time
-	failures    int
-	trips       int // breaker openings since the last lane came up
-	events      []protocol.Event
+	mu           sync.Mutex
+	settings     protocol.EngineSettings
+	lanes        map[string]*lane
+	order        []string
+	nextLaunch   time.Time
+	pausedUntil  time.Time
+	failures     int
+	trips        int // breaker openings since the last successful recovery probe
+	poolFailures []time.Time
+	events       []protocol.Event
 }
 
 // New creates a manager. start may be nil for real tunnels.
@@ -197,6 +207,8 @@ func (m *Manager) stop(l *lane) {
 	}
 	l.gen++
 	l.exitIP = ""
+	l.checking = false
+	l.ipChecked = false
 }
 
 // Run drives the lanes until ctx is cancelled, then closes every tunnel.
@@ -233,13 +245,23 @@ func (m *Manager) Tick(ctx context.Context) {
 		fresh := !hs.IsZero() && now.Sub(hs) < sec(s.HandshakeMaxAge)
 		switch {
 		case fresh && l.status != protocol.LaneUp:
+			newConnection := l.status == protocol.LaneConnecting
 			l.status = protocol.LaneUp
+			l.wasUp = true
 			l.lastUp = now
 			l.lastError = ""
 			l.retryBackoff = 0
 			l.nextIPCheck = now
-			m.failures = 0
-			m.trips = 0
+			if s.TargetUp <= 0 {
+				m.failures = 0
+				m.trips = 0
+			} else if newConnection && m.trips > 0 && !l.started.Before(m.pausedUntil) {
+				// Only a successful post-cooldown probe restores the pool budget.
+				// Ordinary successes (or an old tunnel recovering) do not erase
+				// failures from other servers or keys.
+				m.poolFailures = nil
+				m.trips = 0
+			}
 			m.event("info", protocol.EventLaneUp, l.spec.ID, fmt.Sprintf("connected with key %d", l.keyID()))
 		case fresh:
 			l.lastUp = now
@@ -299,8 +321,13 @@ func (m *Manager) launch(ctx context.Context, now time.Time) {
 		return
 	}
 	limit := max(1, s.MaxConnecting)
-	if m.trips > 0 {
-		limit = 1 // half-open breaker: probe with one lane until something connects
+	pool := s.TargetUp > 0
+	delay := sec(s.LaneStartDelay)
+	if pool {
+		delay = max(delay, poolStartInterval)
+	}
+	if pool || m.trips > 0 {
+		limit = 1 // serialize pool starts and half-open recovery probes
 	}
 	connecting, up := 0, 0
 	var due []*lane
@@ -316,16 +343,24 @@ func (m *Manager) launch(ctx context.Context, now time.Time) {
 			due = append(due, l)
 		}
 	}
-	// Never-tried lanes (zero nextStart) come first, then those whose retry is due.
-	sort.SliceStable(due, func(i, j int) bool { return due[i].nextStart.Before(due[j].nextStart) })
+	// In a pool, reuse previously working backups before unproven candidates.
+	// Otherwise prefer never-tried lanes, then those whose retry is due.
+	sort.SliceStable(due, func(i, j int) bool {
+		if pool && due[i].wasUp != due[j].wasUp {
+			return due[i].wasUp
+		}
+		return due[i].nextStart.Before(due[j].nextStart)
+	})
 	for _, l := range due {
 		if connecting >= limit || (s.TargetUp > 0 && up+connecting >= s.TargetUp) {
 			return
 		}
+		// Reserve the shared interval before starting: even an immediate config
+		// or endpoint error must not let the next candidate bypass the budget.
+		m.nextLaunch = now.Add(delay)
 		m.startLane(ctx, l, now)
 		connecting++
-		m.nextLaunch = now.Add(sec(s.LaneStartDelay))
-		if s.LaneStartDelay > 0 {
+		if delay > 0 {
 			return // one start per delay period
 		}
 	}
@@ -413,15 +448,34 @@ func (m *Manager) park(l *lane, now time.Time) {
 	l.lastError = msg
 	m.event("warn", protocol.EventLaneBackoff, l.spec.ID, msg)
 
-	m.failures++
+	failures := m.failures + 1
+	pool := s.TargetUp > 0
+	if pool {
+		// Cool down globally after failure, not just for this server/key.
+		m.nextLaunch = maxTime(m.nextLaunch, now.Add(max(sec(s.LaneStartDelay), poolStartInterval)))
+		cutoff := now.Add(-max(sec(s.BreakerPause), poolFailureWindow))
+		kept := m.poolFailures[:0]
+		for _, failedAt := range m.poolFailures {
+			if failedAt.After(cutoff) {
+				kept = append(kept, failedAt)
+			}
+		}
+		m.poolFailures = append(kept, now)
+		failures = len(m.poolFailures)
+	} else {
+		m.failures = failures
+	}
 	// After a pause, a single failed probe reopens the breaker: the provider is
 	// most likely still refusing this IP, and more attempts only extend that.
-	if s.BreakerFailures > 0 && s.BreakerPause > 0 && (m.failures >= s.BreakerFailures || m.trips > 0) {
+	if s.BreakerFailures > 0 && s.BreakerPause > 0 && (failures >= s.BreakerFailures || m.trips > 0) {
 		pause := sec(s.BreakerPause) << min(m.trips, 2)
 		m.pausedUntil = now.Add(pause)
 		m.failures = 0
 		m.trips++
-		msg := fmt.Sprintf("%d lanes failed to connect in a row; no new connections for %s", s.BreakerFailures, pause)
+		msg := fmt.Sprintf("%d lanes failed to connect in a row; no new connections for %s", failures, pause)
+		if pool {
+			msg = fmt.Sprintf("%d lane failures within %s; no new connections for %s", failures, max(sec(s.BreakerPause), poolFailureWindow), pause)
+		}
 		if m.trips > 1 {
 			msg = fmt.Sprintf("probe lane failed to connect; no new connections for %s", pause)
 		}
@@ -445,7 +499,7 @@ func (m *Manager) DrainEvents() []protocol.Event {
 	return ev
 }
 
-// Restart reconnects one lane now (admin action). It also lifts a breaker pause.
+// Restart queues one lane (admin action). Pool attempts keep their shared budget.
 func (m *Manager) Restart(id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -462,8 +516,10 @@ func (m *Manager) Restart(id string) error {
 	l.retryBackoff = 0
 	l.lastError = ""
 	l.restarts++
-	m.pausedUntil = time.Time{}
-	m.nextLaunch = time.Time{}
+	if m.settings.TargetUp <= 0 {
+		m.pausedUntil = time.Time{}
+		m.nextLaunch = time.Time{}
+	}
 	return nil
 }
 
@@ -484,8 +540,10 @@ func (m *Manager) RestartAll() {
 		l.retryBackoff = 0
 		l.lastError = ""
 	}
-	m.pausedUntil = time.Time{}
-	m.trips = 0
+	if m.settings.TargetUp <= 0 {
+		m.pausedUntil = time.Time{}
+		m.trips = 0
+	}
 }
 
 // PausedUntil reports when the circuit breaker closes again (zero if it isn't open).
@@ -595,19 +653,20 @@ func (m *Manager) scheduleIPChecks(ctx context.Context, now time.Time) {
 	}
 	for _, id := range m.order {
 		l := m.lanes[id]
-		if l.status != protocol.LaneUp || l.tun == nil || l.checking || now.Before(l.nextIPCheck) {
+		if l.status != protocol.LaneUp || l.tun == nil || l.checking || now.Before(l.nextIPCheck) || (s.TargetUp > 0 && l.ipChecked) {
 			continue
 		}
 		l.checking = true
+		l.ipChecked = true
 		gen, tun := l.gen, l.tun
 		go func() {
 			ip, latency, err := checkIP(ctx, tun, s.IPCheckURL, sec(s.DialTimeout))
 			m.mu.Lock()
 			defer m.mu.Unlock()
-			l.checking = false
 			if l.gen != gen {
 				return
 			}
+			l.checking = false
 			if err != nil {
 				l.nextIPCheck = m.now().Add(time.Minute)
 				return
