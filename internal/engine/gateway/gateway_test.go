@@ -100,12 +100,17 @@ func (e *env) apply() {
 	e.srv.SetSettings(e.set)
 }
 
+// clientTimeout bounds one request through the proxy. Under -race a user's
+// first request (an argon2id check before the login is cached) plus the two
+// userspace network stacks took 13 s on a laptop; 10 s made tests flaky.
+const clientTimeout = 60 * time.Second
+
 // httpGet fetches http://api.ipify.org/ through the proxy and returns the body
 // (the exit IP) or the error status.
 func (e *env) httpGet(user, pass string) (string, int) {
 	e.t.Helper()
 	pu := &url.URL{Scheme: "http", Host: e.srv.Addr(), User: url.UserPassword(user, pass)}
-	c := http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{Proxy: http.ProxyURL(pu), DisableKeepAlives: true}}
+	c := http.Client{Timeout: clientTimeout, Transport: &http.Transport{Proxy: http.ProxyURL(pu), DisableKeepAlives: true}}
 	resp, err := c.Get("http://api.ipify.org/")
 	if err != nil {
 		e.t.Fatalf("GET through proxy: %v", err)
@@ -120,7 +125,7 @@ func (e *env) socksGet(user, pass string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	c := http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{
+	c := http.Client{Timeout: clientTimeout, Transport: &http.Transport{
 		DialContext: func(ctx context.Context, n, a string) (net.Conn, error) { return d.Dial(n, a) }, DisableKeepAlives: true}}
 	resp, err := c.Get("http://api.ipify.org/")
 	if err != nil {
