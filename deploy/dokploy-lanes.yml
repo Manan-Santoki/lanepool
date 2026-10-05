@@ -1,0 +1,47 @@
+# lanepool on Dokploy, optional part 3: the lanes (WireGuard tunnels) in their
+# own service, so engine deploys no longer reconnect them.
+#
+# The engine's gateway, policy and control sync change often; the tunnels
+# rarely do. With this service, an engine redeploy drops open proxy connections
+# for a few seconds and sends no new handshakes. Redeploy this service only for
+# changes under internal/engine/lanes, internal/wg or internal/lanesvc.
+#
+# Dokploy compose service with compose path ./deploy/dokploy-lanes.yml.
+# Environment (Dokploy → Environment):
+#   LANES_TOKEN   shared secret; set the same LANES_TOKEN on the engine
+# Then set LANES_URL=http://lanepool-lanes:9191 on the engine and redeploy it.
+#
+# Switching over reconnects every lane once (the engine's own tunnels close,
+# these open). The lanes that worked are kept in the lanes-data volume and are
+# tried first after every restart.
+services:
+  lanes:
+    build:
+      context: ..
+    image: lanepool:lanes
+    command: lanes
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      LANES_TOKEN: ${LANES_TOKEN:?set LANES_TOKEN}
+      LANES_STATE_FILE: /data/known-lanes.json
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - lanes-data:/data
+    ulimits:
+      nofile: { soft: 65536, hard: 65536 }
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    networks:
+      lanepool-net:
+        aliases: [lanepool-lanes]
+
+volumes:
+  lanes-data:
+
+networks:
+  lanepool-net:
+    external: true

@@ -111,6 +111,7 @@ type Manager struct {
 	fallback    bool
 	poolDelay   time.Duration
 	events      []protocol.Event
+	remembered  map[string]bool // lanes that worked before a restart (Remember)
 }
 
 // New creates a manager. start may be nil for real tunnels.
@@ -138,7 +139,7 @@ func (m *Manager) Apply(settings protocol.EngineSettings, specs []protocol.LaneS
 		l, ok := m.lanes[spec.ID]
 		switch {
 		case !ok:
-			l = &lane{spec: spec, status: protocol.LaneQueued}
+			l = &lane{spec: spec, status: protocol.LaneQueued, wasUp: m.remembered[spec.ID]}
 			if !spec.Enabled {
 				l.status = protocol.LaneDisabled
 			}
@@ -553,6 +554,46 @@ func (m *Manager) event(level, typ, laneID, msg string) {
 	if len(m.events) > 1000 {
 		m.events = m.events[len(m.events)-1000:]
 	}
+}
+
+// Remember marks lanes that connected before a restart, so a pool tries them
+// first, in its startup bursts too, instead of servers it never reached. Lanes
+// not defined yet are marked when Apply adds them.
+func (m *Manager) Remember(ids []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.remembered == nil {
+		m.remembered = map[string]bool{}
+	}
+	for _, id := range ids {
+		m.remembered[id] = true
+		if l := m.lanes[id]; l != nil {
+			l.wasUp = true
+		}
+	}
+}
+
+// KnownGood lists lanes that have connected (since start or via Remember), most
+// recently up first, at most max of them.
+func (m *Manager) KnownGood(max int) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	type known struct {
+		id     string
+		lastUp time.Time
+	}
+	var ks []known
+	for _, id := range m.order {
+		if l := m.lanes[id]; l.wasUp {
+			ks = append(ks, known{id, l.lastUp})
+		}
+	}
+	sort.SliceStable(ks, func(i, j int) bool { return ks[i].lastUp.After(ks[j].lastUp) })
+	out := make([]string, 0, min(len(ks), max))
+	for _, k := range ks[:min(len(ks), max)] {
+		out = append(out, k.id)
+	}
+	return out
 }
 
 // DrainEvents returns and clears the events since the last call.

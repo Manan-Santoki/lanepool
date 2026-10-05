@@ -20,6 +20,7 @@ import (
 
 	"github.com/Manan-Santoki/lanepool/internal/engine/gateway"
 	"github.com/Manan-Santoki/lanepool/internal/engine/lanes"
+	"github.com/Manan-Santoki/lanepool/internal/lanesvc"
 	"github.com/Manan-Santoki/lanepool/internal/protocol"
 )
 
@@ -34,13 +35,36 @@ type Config struct {
 	PollInterval   time.Duration // config refresh; default 10s
 	ReportInterval time.Duration // default 2s
 	Start          lanes.StartFunc
+
+	// LanesURL, when set, uses a separate "lanepool lanes" process for the
+	// tunnels (lanesvc), so engine restarts don't reconnect them. Otherwise the
+	// lanes run in this process.
+	LanesURL   string
+	LanesToken string
+	// StateFile keeps the lanes that worked across restarts (in-process lanes
+	// only; the lanes process keeps its own). Empty = off.
+	StateFile string
+}
+
+// LaneSet is what the engine needs from its lanes: an in-process lanes.Manager
+// or a lanesvc.Client for a separate lanes process.
+type LaneSet interface {
+	gateway.Lanes
+	Apply(settings protocol.EngineSettings, specs []protocol.LaneSpec)
+	Run(ctx context.Context, tick time.Duration)
+	DrainEvents() []protocol.Event
+	States() []protocol.LaneState
+	PausedUntil() time.Time
+	Restart(id string) error
+	RestartAll()
 }
 
 // Engine is a running engine.
 type Engine struct {
 	cfg     Config
 	log     *slog.Logger
-	lanes   *lanes.Manager
+	lanes   LaneSet
+	local   *lanes.Manager // the in-process lanes; nil with a lanes process
 	policy  *gateway.Policy
 	gw      *gateway.Server
 	started time.Time
@@ -53,7 +77,7 @@ type Engine struct {
 }
 
 // New creates an engine.
-func New(cfg Config, log *slog.Logger) *Engine {
+func New(cfg Config, log *slog.Logger) (*Engine, error) {
 	if cfg.PollInterval == 0 {
 		cfg.PollInterval = 10 * time.Second
 	}
@@ -63,14 +87,25 @@ func New(cfg Config, log *slog.Logger) *Engine {
 	if cfg.NodeID == "" {
 		cfg.NodeID = "local"
 	}
-	m := lanes.New(protocol.DefaultSettings(), cfg.Start)
+	var ls LaneSet
+	var local *lanes.Manager
+	if cfg.LanesURL != "" {
+		c, err := lanesvc.NewClient(cfg.LanesURL, cfg.LanesToken, log)
+		if err != nil {
+			return nil, err
+		}
+		ls = c
+	} else {
+		local = lanes.New(protocol.DefaultSettings(), cfg.Start)
+		ls = local
+	}
 	p := gateway.NewPolicy()
 	return &Engine{
-		cfg: cfg, log: log, lanes: m, policy: p, started: time.Now(),
-		gw:     &gateway.Server{Policy: p, Lanes: m, Log: log, TrustedProxies: cfg.TrustedProxies},
+		cfg: cfg, log: log, lanes: ls, local: local, policy: p, started: time.Now(),
+		gw:     &gateway.Server{Policy: p, Lanes: ls, Log: log, TrustedProxies: cfg.TrustedProxies},
 		client: &http.Client{Timeout: 15 * time.Second},
 		reload: make(chan struct{}, 1),
-	}
+	}, nil
 }
 
 // Run starts everything and blocks until ctx is cancelled.
@@ -93,6 +128,13 @@ func (e *Engine) Run(ctx context.Context) error {
 	e.pending.Events = append(e.pending.Events, protocol.Event{
 		Time: time.Now(), Level: "info", Type: protocol.EventEngineStarted, Message: "engine started"})
 
+	if e.local != nil && e.cfg.StateFile != "" {
+		lanes.LoadKnownGood(e.local, e.cfg.StateFile, e.log)
+		go lanes.SaveKnownGood(ctx, e.local, e.cfg.StateFile, 30*time.Second, e.log)
+	}
+	if e.cfg.LanesURL != "" {
+		e.log.Info("lanes run in a separate process", "url", e.cfg.LanesURL)
+	}
 	go e.lanes.Run(ctx, time.Second)
 	go e.configLoop(ctx)
 	e.reportLoop(ctx)

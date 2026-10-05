@@ -82,13 +82,21 @@ your apps ─► lanepool proxy ──┼─► lane de-fra ─► 185.x.x.x    
 | Component | Role |
 |---|---|
 | `lanepool control` | Dashboard (React + shadcn/ui, embedded), REST API, Postgres |
-| `lanepool engine` | The lanes and the proxy (HTTP CONNECT, plain HTTP and SOCKS5 on one port) |
+| `lanepool engine` | The proxy (HTTP CONNECT, plain HTTP and SOCKS5 on one port), and the lanes unless `lanepool lanes` runs them |
+| `lanepool lanes` | Optional: only the lanes (WireGuard tunnels), so engine deploys don't reconnect them |
 | Postgres | Users, settings, keys (encrypted), logs, usage, events |
 
 The engine pulls its configuration from control and pushes state, connection
 records and usage every two seconds. It never touches the database. Redeploying
 the dashboard therefore doesn't drop VPN sessions, and engines could later run on
 separate exit servers with their own IPs.
+
+With `LANES_URL` set, the engine leaves the tunnels to a `lanepool lanes`
+process and dials through it. The engine then holds only the proxy and policy
+code, which changes most often; redeploying it drops open proxy connections for
+a few seconds but sends no new WireGuard handshakes. Whichever process runs the
+lanes keeps the ones that worked in `LANES_STATE_FILE` and tries them first
+after a restart.
 
 ## Quick start (Docker Compose)
 
@@ -129,6 +137,10 @@ For two containers, use `lanepool control` and `lanepool engine`, as in
 | `LISTEN` / `PROXY_LISTEN` / `ENGINE_LISTEN` | | `:8000` / `:8080` / `:9090` |
 | `COOKIE_SECURE` | control | `false`; set `true` behind HTTPS |
 | `TRUSTED_PROXIES` | engine | CIDRs allowed to send PROXY protocol headers |
+| `LANES_URL` | engine | empty (lanes in the engine); `http://lanepool-lanes:9191` for a lanes process |
+| `LANES_TOKEN` | engine, lanes | `ENGINE_TOKEN` |
+| `LANES_LISTEN` | lanes | `:9191` |
+| `LANES_STATE_FILE` | engine, lanes | empty (off); e.g. `/data/known-lanes.json` |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | control | optional first admin |
 
 Create or reset an admin from the command line:
@@ -154,6 +166,10 @@ the VPN lanes:
    dashboard). Add a domain for service `control`, port `8000`.
 2. **Engine:** compose path `./deploy/dokploy-engine.yml`. Use the same
    `ENGINE_TOKEN` as the control service.
+3. **Lanes (optional):** compose path `./deploy/dokploy-lanes.yml` with a
+   `LANES_TOKEN`; then set `LANES_URL=http://lanepool-lanes:9191` and the same
+   `LANES_TOKEN` on the engine. Engine deploys then keep every tunnel connected.
+   Switching over reconnects each lane once.
 
 - **Proxy for other Dokploy apps:** `http://USER:PASS@lanepool:8080`.
 - **Public HTTPS proxy:** use the Traefik file above.

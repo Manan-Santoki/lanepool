@@ -11,14 +11,17 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -26,6 +29,9 @@ import (
 	"github.com/Manan-Santoki/lanepool/internal/control"
 	"github.com/Manan-Santoki/lanepool/internal/db"
 	"github.com/Manan-Santoki/lanepool/internal/engine"
+	"github.com/Manan-Santoki/lanepool/internal/engine/lanes"
+	"github.com/Manan-Santoki/lanepool/internal/lanesvc"
+	"github.com/Manan-Santoki/lanepool/internal/protocol"
 	"github.com/Manan-Santoki/lanepool/web"
 )
 
@@ -46,6 +52,8 @@ func main() {
 		err = runControl(ctx, log)
 	case "engine":
 		err = runEngine(ctx, log)
+	case "lanes":
+		err = runLanes(ctx, log)
 	case "all":
 		err = runAll(ctx, log)
 	case "admin":
@@ -63,7 +71,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: lanepool control | engine | all | admin create --email EMAIL | version")
+	fmt.Fprintln(os.Stderr, "usage: lanepool control | engine | lanes | all | admin create --email EMAIL | version")
 }
 
 func env(key, def string) string {
@@ -155,6 +163,9 @@ func engineConfig() (engine.Config, error) {
 		ProxyAddr:      env("PROXY_LISTEN", ":8080"),
 		APIAddr:        env("ENGINE_LISTEN", ":9090"),
 		TrustedProxies: trusted,
+		LanesURL:       os.Getenv("LANES_URL"),
+		LanesToken:     env("LANES_TOKEN", os.Getenv("ENGINE_TOKEN")),
+		StateFile:      os.Getenv("LANES_STATE_FILE"),
 	}, nil
 }
 
@@ -185,7 +196,42 @@ func runEngine(ctx context.Context, log *slog.Logger) error {
 	if cfg.Token == "" {
 		return fmt.Errorf("ENGINE_TOKEN is required")
 	}
-	return engine.New(cfg, log).Run(ctx)
+	eng, err := engine.New(cfg, log)
+	if err != nil {
+		return err
+	}
+	return eng.Run(ctx)
+}
+
+// runLanes runs only the lanes (WireGuard tunnels) and serves them to an engine
+// started with LANES_URL. Engine deploys then leave the tunnels connected.
+func runLanes(ctx context.Context, log *slog.Logger) error {
+	token := env("LANES_TOKEN", os.Getenv("ENGINE_TOKEN"))
+	if token == "" {
+		return fmt.Errorf("LANES_TOKEN (or ENGINE_TOKEN) is required")
+	}
+	m := lanes.New(protocol.DefaultSettings(), nil)
+	var wg sync.WaitGroup
+	if path := os.Getenv("LANES_STATE_FILE"); path != "" {
+		lanes.LoadKnownGood(m, path, log)
+		wg.Add(1)
+		go func() { defer wg.Done(); lanes.SaveKnownGood(ctx, m, path, 30*time.Second, log) }()
+	}
+	go m.Run(ctx, time.Second)
+	srv := &http.Server{Addr: env("LANES_LISTEN", ":9191"), Handler: lanesvc.NewServer(m, token, log), ReadHeaderTimeout: 10 * time.Second}
+	go func() {
+		<-ctx.Done()
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		srv.Shutdown(sctx)
+	}()
+	log.Info("lanes listening; waiting for an engine to send the configuration", "addr", srv.Addr, "version", version)
+	err := srv.ListenAndServe()
+	wg.Wait() // the last save of the known lanes
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	return err
 }
 
 // runAll runs control and engine in one process. ENGINE_TOKEN is generated when
@@ -210,7 +256,11 @@ func runAll(ctx context.Context, log *slog.Logger) error {
 	defer srv.Close()
 	errc := make(chan error, 2)
 	go func() { errc <- srv.Run(ctx) }()
-	go func() { errc <- engine.New(ecfg, log).Run(ctx) }()
+	eng, err := engine.New(ecfg, log)
+	if err != nil {
+		return err
+	}
+	go func() { errc <- eng.Run(ctx) }()
 	select {
 	case err := <-errc:
 		return err

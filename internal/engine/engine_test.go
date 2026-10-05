@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/Manan-Santoki/lanepool/internal/auth"
+	"github.com/Manan-Santoki/lanepool/internal/engine/lanes"
+	"github.com/Manan-Santoki/lanepool/internal/lanesvc"
 	"github.com/Manan-Santoki/lanepool/internal/protocol"
 	"github.com/Manan-Santoki/lanepool/internal/wg/wgtest"
 )
@@ -91,10 +93,13 @@ func TestEngineEndToEnd(t *testing.T) {
 	defer ctl.Close()
 
 	proxyAddr, apiAddr := freePort(t), freePort(t)
-	e := New(Config{
+	e, err := New(Config{
 		ControlURL: ctl.URL, Token: "secret", ProxyAddr: proxyAddr, APIAddr: apiAddr,
 		PollInterval: 200 * time.Millisecond, ReportInterval: 100 * time.Millisecond,
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { e.Run(ctx); close(done) }()
@@ -173,4 +178,97 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", what)
+}
+
+// With the lanes in a separate process, the engine is only the proxy: traffic
+// goes engine -> lanes process -> tunnel, and restarting the engine leaves the
+// tunnel connected (no new WireGuard handshake).
+func TestEngineWithLanesProcess(t *testing.T) {
+	priv, pub := wgtest.KeyPair()
+	prov := wgtest.Start(t, "203.0.113.60", pub)
+	hash, _ := auth.HashPassword("password123")
+	s := protocol.DefaultSettings()
+	s.LaneStartDelay, s.ConnectTimeout = 0, 5
+	fc := &fakeControl{cfg: protocol.EngineConfig{
+		Version:  "v1",
+		Settings: s,
+		Lanes: []protocol.LaneSpec{{
+			ID: "test:b", Name: "b", CountryCode: "US", Enabled: true, Endpoint: prov.Endpoint, PeerKey: prov.PublicKey,
+			Addresses: []string{wgtest.ClientAddr.String()}, DNS: []string{wgtest.DNSAddr.String()},
+			Keys: []protocol.LaneKey{{ID: 7, PrivateKey: priv}},
+		}},
+		Users: []protocol.UserSpec{{ID: 3, Username: "erin", PasswordHash: hash, Enabled: true}},
+	}}
+	ctl := httptest.NewServer(fc)
+	defer ctl.Close()
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	m := lanes.New(protocol.DefaultSettings(), nil)
+	lctx, lcancel := context.WithCancel(context.Background())
+	defer lcancel()
+	go m.Run(lctx, 50*time.Millisecond)
+	lanesSrv := httptest.NewServer(lanesvc.NewServer(m, "lanes-secret", log))
+	defer lanesSrv.Close()
+
+	proxyAddr := freePort(t)
+	startEngine := func() func() {
+		e, err := New(Config{
+			ControlURL: ctl.URL, Token: "secret", ProxyAddr: proxyAddr, APIAddr: freePort(t),
+			PollInterval: 200 * time.Millisecond, ReportInterval: 100 * time.Millisecond,
+			LanesURL: lanesSrv.URL, LanesToken: "lanes-secret",
+		}, log)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() { e.Run(ctx); close(done) }()
+		return func() { cancel(); <-done }
+	}
+	get := func() string {
+		pu := &url.URL{Scheme: "http", Host: proxyAddr, User: url.UserPassword("erin", "password123")}
+		hc := http.Client{Timeout: 60 * time.Second, Transport: &http.Transport{Proxy: http.ProxyURL(pu), DisableKeepAlives: true}}
+		resp, err := hc.Get("http://api.ipify.org/")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return strings.TrimSpace(string(body))
+	}
+	laneUp := func() bool {
+		st := m.States()
+		return len(st) == 1 && st[0].Status == protocol.LaneUp
+	}
+
+	stop := startEngine()
+	waitFor(t, "lane up in the lanes process", laneUp)
+	waitFor(t, "lane up in an engine report", func() bool {
+		r := fc.all()
+		return len(r) > 0 && len(r[len(r)-1].Lanes) == 1 && r[len(r)-1].Lanes[0].Status == protocol.LaneUp
+	})
+	if ip := get(); ip != "203.0.113.60" {
+		t.Fatalf("exit IP %q", ip)
+	}
+	handshake := *m.States()[0].LastHandshake
+
+	stop() // engine redeploy
+	if !laneUp() {
+		t.Fatal("lane went down with the engine")
+	}
+	restarted := time.Now()
+	stop = startEngine()
+	defer stop()
+	waitFor(t, "a report from the new engine with the lane up", func() bool {
+		r := fc.all()
+		last := r[len(r)-1]
+		return last.StartedAt.After(restarted) && len(last.Lanes) == 1 && last.Lanes[0].Status == protocol.LaneUp
+	})
+	// The first report can precede the new engine's first config (users).
+	var ip string
+	waitFor(t, "proxying after the engine restart", func() bool { ip = get(); return ip == "203.0.113.60" })
+	st := m.States()[0]
+	if st.Restarts != 0 || st.LastHandshake.Before(handshake) {
+		t.Fatalf("tunnel was restarted with the engine: %+v", st)
+	}
 }

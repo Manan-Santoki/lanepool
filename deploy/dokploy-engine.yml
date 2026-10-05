@@ -9,6 +9,14 @@
 #   CONTROL_URL       default http://lanepool-control:8000
 #   TRUSTED_PROXIES   e.g. 10.0.1.0/24 (dokploy-network) when Traefik sends PROXY protocol
 #
+#   LANES_URL         optional: http://lanepool-lanes:9191 to use the separate
+#                     lanes service (deploy/dokploy-lanes.yml); engine deploys
+#                     then leave the tunnels connected. Empty = lanes run here.
+#   LANES_TOKEN       same value as the lanes service (default: ENGINE_TOKEN)
+#
+# With lanes running here, the lanes that worked are kept in a volume and tried
+# first after a restart, so a redeploy reconnects to known-good servers.
+#
 # On dokploy-network and lanepool-net the engine is "lanepool": other apps use
 # lanepool:8080 (join the external lanepool-net network for that), control
 # reaches its API at lanepool:9090. Create lanepool-net once (Dokploy →
@@ -27,7 +35,12 @@ services:
       CONTROL_URL: ${CONTROL_URL:-http://lanepool-control:8000}
       ENGINE_TOKEN: ${ENGINE_TOKEN:?set ENGINE_TOKEN}
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+      LANES_URL: ${LANES_URL:-}
+      LANES_TOKEN: ${LANES_TOKEN:-}
+      LANES_STATE_FILE: /data/known-lanes.json
       LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - engine-data:/data
     ulimits:
       nofile: { soft: 65536, hard: 65536 }
     logging:
@@ -40,6 +53,9 @@ services:
       # need not join dokploy-network.
       lanepool-net:
         aliases: [lanepool]
+
+volumes:
+  engine-data:
 
 networks:
   dokploy-network:

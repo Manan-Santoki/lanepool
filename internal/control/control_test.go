@@ -83,10 +83,13 @@ func newStack(t *testing.T, surfsharkAPI string) *stack {
 	go srv.jobs(ctx)
 	go srv.laneSyncLoop(ctx)
 
-	eng := engine.New(engine.Config{
+	eng, err := engine.New(engine.Config{
 		ControlURL: api.URL, Token: "engine-token", ProxyAddr: proxyAddr, APIAddr: engineAPI,
 		PollInterval: 300 * time.Millisecond, ReportInterval: 200 * time.Millisecond,
 	}, log)
+	if err != nil {
+		t.Fatal(err)
+	}
 	done := make(chan struct{})
 	go func() { eng.Run(ctx); close(done) }()
 	t.Cleanup(func() { cancel(); <-done })
