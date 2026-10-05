@@ -30,18 +30,18 @@ interface NumField {
 }
 
 const PACING: NumField[] = [
-  { key: "laneStartDelay", label: "Delay between lane starts", unit: "seconds", help: "Wait this long before starting the next lane." },
-  { key: "maxConnecting", label: "Max lanes connecting at once", unit: "count", min: 1, help: "How many lanes may handshake at the same time." },
+  { key: "laneStartDelay", label: "Delay between lane starts", unit: "seconds", help: "Regular lane pacing. Pool fallback waits 60, 90, 120 seconds after failures, or this delay if larger. Startup bursts have no delay between individual lanes." },
+  { key: "maxConnecting", label: "Max lanes connecting at once", unit: "count", min: 1, help: "Regular lane handshake limit. Server pools use up to three startup bursts sized to their missing target slots, then one fallback attempt at a time." },
   { key: "connectTimeout", label: "Connect timeout", unit: "seconds", help: "Give up on a lane's handshake after this long and retry later." },
-  { key: "retryBackoff", label: "Retry backoff", unit: "seconds", help: "First wait before retrying a failed lane. Doubles on every consecutive failure." },
-  { key: "retryBackoffMax", label: "Max retry backoff", unit: "seconds", help: "Upper limit for the doubling backoff." },
+  { key: "retryBackoff", label: "Retry backoff", unit: "seconds", help: "First wait before retrying a regular failed lane; doubles after failures. Server pools instead start fallback at 60 seconds and add 30 after each failure." },
+  { key: "retryBackoffMax", label: "Max retry backoff", unit: "seconds", help: "Upper limit for regular lane backoff and increasing pool fallback delays. Pool fallback is always at least 60 seconds and respects a larger lane-start delay." },
   {
     key: "breakerFailures",
     label: "Circuit breaker failures",
     unit: "count",
-    help: "This many lane failures in a row pause all new lane connections (the provider is probably blocking you).",
+    help: "Pause regular lane starts after this many consecutive failures. 0 = off. Server pools use their increasing fallback delays instead of this circuit breaker.",
   },
-  { key: "breakerPause", label: "Circuit breaker pause", unit: "seconds", help: "How long new lane connections stay paused once the breaker opens." },
+  { key: "breakerPause", label: "Circuit breaker pause", unit: "seconds", help: "How long regular lane starts stay paused once the breaker opens. Does not apply to server pool fallback." },
   {
     key: "handshakeMaxAge",
     label: "Max handshake age",
@@ -51,7 +51,7 @@ const PACING: NumField[] = [
 ]
 
 const HEALTH: NumField[] = [
-  { key: "ipCheckInterval", label: "IP check interval", unit: "seconds", help: "How often each lane re-checks its exit IP and latency." },
+  { key: "ipCheckInterval", label: "IP check interval", unit: "seconds", help: "How often each lane re-checks its exit IP and latency. Server pools look up each tunnel only once, with no repeated probes or lookup retries. 0 = no lookups." },
 ]
 
 const TIMEOUTS: NumField[] = [
@@ -265,9 +265,9 @@ function EngineForm({ engine }: { engine: EngineSettings }) {
             <span className="flex items-start gap-2">
               <InfoIcon className="mt-0.5 size-4 shrink-0" />
               <span>
-                VPN providers block IPs and accounts that open many WireGuard sessions at once. Pacing starts lanes
-                slowly, limits parallel handshakes and backs off after failures so your exit IPs stay usable. Lower
-                values bring lanes up faster but increase the risk of being throttled.
+                Regular lanes follow the pacing and circuit-breaker settings below. Server pools first try up to
+                three parallel bursts into missing target slots, keeping successful tunnels connected. Remaining
+                slots use single attempts with increasing delays: 60, 90, 120 seconds, and so on.
               </span>
             </span>
           }
@@ -300,7 +300,7 @@ function EngineForm({ engine }: { engine: EngineSettings }) {
         </Group>
 
         <div className="grid gap-4 lg:grid-cols-2">
-          <Group title="Health checks" description="Each lane periodically fetches this URL through its tunnel to learn its exit IP and latency.">
+          <Group title="Exit IP lookups" description="Fetch this URL through a tunnel to learn its exit IP and latency. Server pools use one lookup per tunnel and passive WireGuard handshakes to monitor connectivity.">
             <div className="space-y-5">
               <FormField
                 label="IP check URL"

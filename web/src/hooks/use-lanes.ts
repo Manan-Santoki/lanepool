@@ -36,7 +36,7 @@ export function useRestartAllLanes() {
   return useApiMutation({
     mutationFn: () => api.lanes.restartAll(),
     invalidate: [qk.lanes],
-    success: "Restarting all lanes, one at a time",
+    success: "Queued lanes for reconnection",
   })
 }
 
@@ -46,7 +46,7 @@ export function useAddLanes() {
     invalidate: [qk.lanes, qk.overview, qk.surfshark],
     toastError: false,
     success: (_, locations) =>
-      `Added ${locations.length} lane${locations.length === 1 ? "" : "s"}; they connect one at a time`,
+      `Added ${locations.length} lane${locations.length === 1 ? "" : "s"} to the connection pool`,
   })
 }
 

@@ -22,7 +22,7 @@ export interface GatewayState { listening: boolean; activeConnections: number; p
 export interface EngineStatus { connected: boolean; nodeId?: string; startedAt?: string; lastReportAt?: string }
 
 export interface Overview {
-  lanes: { total: number; byStatus: Partial<Record<LaneStatus, number>> };
+  lanes: { total: number; target?: number; byStatus: Partial<Record<LaneStatus, number>> };
   uniqueExitIps: number;
   activeConnections: number;
   gateway: GatewayState;

@@ -515,6 +515,12 @@ func TestSurfsharkServerPool(t *testing.T) {
 	if lanes[0].Status != protocol.LaneStandby {
 		t.Fatalf("status %q, want standby", lanes[0].Status)
 	}
+	var overview struct {
+		Lanes struct{ Total, Target int }
+	}
+	if code := st.call(st.client, "GET", "/api/overview", nil, &overview); code != 200 || overview.Lanes.Total != 3 || overview.Lanes.Target != 2 {
+		t.Fatalf("overview: HTTP %d, %+v", code, overview)
+	}
 	cfg, err := st.srv.buildEngineConfig(context.Background())
 	if err != nil {
 		t.Fatal(err)

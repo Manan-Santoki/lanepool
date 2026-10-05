@@ -156,6 +156,14 @@ func (s *Server) overview(_ http.ResponseWriter, r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	selection, err := s.selection(ctx)
+	if err != nil {
+		return nil, err
+	}
+	target := len(lanes)
+	if selection.AllServers {
+		target = max(selection.Lanes, 1)
+	}
 	var traffic trafficPoint
 	if err := s.db.QueryRow(ctx, `SELECT COALESCE(sum(bytes_up),0)::bigint, COALESCE(sum(bytes_down),0)::bigint,
 		COALESCE(sum(connections),0)::bigint, COALESCE(sum(failures),0)::bigint
@@ -181,7 +189,7 @@ func (s *Server) overview(_ http.ResponseWriter, r *http.Request) (any, error) {
 		recent = append(recent, e)
 	}
 	return map[string]any{
-		"lanes":             map[string]any{"total": len(lanes), "byStatus": byStatus},
+		"lanes":             map[string]any{"total": len(lanes), "target": target, "byStatus": byStatus},
 		"uniqueExitIps":     len(exit),
 		"activeConnections": gw.ActiveConnections,
 		"gateway":           gw,

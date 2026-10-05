@@ -316,8 +316,8 @@ export function LanesPage() {
                 description={
                   <>
                     <p>
-                      Lanes reconnect <strong>one at a time</strong> to respect pacing, so the full restart can take a
-                      while. Connections on each lane are closed as it restarts.
+                      Lanes reconnect using the current connection schedule. Pool restart commands keep their
+                      fallback delays and do not start a new set of bursts. Connections on each lane are closed.
                     </p>
                     <p>
                       WireGuard has no disconnect message: every restart leaves the old session on the provider side

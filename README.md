@@ -21,13 +21,30 @@ your apps ─► lanepool proxy ──┼─► lane de-fra ─► 185.x.x.x    
 - **Lanes:** WireGuard tunnels run inside the process (wireguard-go with a
   userspace network stack). No root, no `NET_ADMIN`, and no changes to the host's
   routing. DNS is resolved through each lane.
-- **Gentle on providers:** lanes connect one at a time, and a failed lane is retried
-  later with the next key. Repeated failures pause new connections. Working lanes
-  are never restarted on configuration changes. (VPN providers block IPs that
-  open many sessions at once.)
+- **Connection scheduling:** regular lanes connect with configurable pacing and
+  a circuit breaker. Server pools try startup bursts, then use gradual fallback.
+  Failed lanes can retry with another key. Working tunnels are preserved when
+  their configuration is unchanged.
 - **Server pool:** optionally every Surfshark server becomes a candidate lane
   (each location has many server IPs, found through DNS). lanepool keeps a set
-  number connected and, when a server doesn't connect, moves on to the next one.
+  number connected and leaves the rest on standby. Startup uses up to three
+  parallel connection bursts, each limited to the remaining target slots. For
+  example, a target of 30 starts with 30 attempts; if 20 connect, the next burst
+  tries 10 more. Each burst waits for all its handshakes to succeed or time out
+  before the next wave. Successful tunnels stay connected. Once the target is
+  reached or three rounds finish, remaining slots use one attempt at a time:
+  wait 60 s, then 90 s after a failure, then 120 s, and so on. The delay is capped
+  by max retry backoff (at least 60 s); a larger configured lane-start delay
+  takes precedence. Success resets fallback to 60 s. The non-pool circuit
+  breaker does not override this sequence. Reloads and restart commands do not
+  rearm bursts or reset fallback delays; restarting the engine starts a new
+  startup sequence.
+  Previously working backups are preferred when available. The dashboard shows
+  connected lanes against the target, with the candidate count separately.
+  Pool exit-IP/latency lookups run once per tunnel when enabled, with no retries
+  or periodic probes; WireGuard handshakes monitor connectivity. Setting the IP
+  check interval to 0 disables lookups entirely. A fresh handshake does not
+  guarantee access to every destination.
 - **Proxy users** with:
   - allowed countries and lanes
   - sticky sessions
@@ -37,6 +54,8 @@ your apps ─► lanepool proxy ──┼─► lane de-fra ─► 185.x.x.x    
   - client IP allowlists
 - **Username parameters** like commercial proxies: `alice-country-us`,
   `alice-session-abc123` (same exit for 10 minutes), `alice-sessttl-30`, `alice-lane-<id>`.
+  A user's live sessions get different lanes while there are enough of them, so
+  N sessions mean N exit IPs; they share a lane only when every lane is held.
 - **Burned-IP avoidance:** mark an exit IP as blocked by a domain, from the
   dashboard or from your app through the API, and lanepool stops using that lane
   for that domain. Repeated connection failures are detected automatically.
@@ -158,8 +177,10 @@ The full API is documented in [`docs/api.md`](docs/api.md).
   all of them, and IP rotation doesn't hide cookies or browser fingerprints.
 - **Pacing matters.** Providers limit how fast an account or IP may open new
   WireGuard sessions. Opening many at once can get your server's IP refused for
-  hours. Keep the defaults (one new lane every 10 s, at most 2 connecting) and
-  avoid restarting all lanes repeatedly.
+  hours. Outside pool mode the defaults are one new lane every 10 s and at most
+  2 connecting. Pool mode initially connects in three target-sized bursts, then
+  falls back to single attempts with increasing delays. Avoid restarting the
+  engine repeatedly, which would repeat its startup bursts.
 - **WireGuard has no disconnect.** After a restart, old sessions still count on
   the provider's side for a while.
 - **Use it responsibly:** respect the terms of the sites you access and of your

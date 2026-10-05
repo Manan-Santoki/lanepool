@@ -16,18 +16,20 @@ import {
 } from "@/components/ui/sidebar"
 import { BrandIcon, NAV_GROUPS } from "@/components/layout/nav"
 import { useLanes } from "@/hooks/use-lanes"
+import { useOverview } from "@/hooks/use-overview"
 import { useStreamState } from "@/hooks/use-stream"
 
 export function AppSidebar() {
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const { setOpenMobile, isMobile } = useSidebar()
   const lanes = useLanes().data
+  const overview = useOverview().data
   const stream = useStreamState()
   const lanesUp = lanes?.filter((l) => l.status === "up").length
   const liveConns = stream?.activeConnections
 
   const badgeFor = (to: string) => {
-    if (to === "/lanes" && lanes) return `${lanesUp}/${lanes.length}`
+    if (to === "/lanes" && lanes) return `${lanesUp}/${overview?.lanes.target ?? lanes.length}`
     if (to === "/connections" && liveConns !== undefined) return String(liveConns)
     return null
   }

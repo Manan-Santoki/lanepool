@@ -32,6 +32,7 @@ export function OverviewPage() {
     ? laneList.reduce<Record<string, number>>((acc, l) => ({ ...acc, [l.status]: (acc[l.status] ?? 0) + 1 }), {})
     : (o?.lanes.byStatus ?? {})
   const laneTotal = laneList?.length ?? o?.lanes.total ?? 0
+  const laneTarget = o?.lanes.target ?? laneTotal
   const lanesUp = byStatus.up ?? 0
   const liveConnections = stream?.activeConnections ?? o?.activeConnections ?? 0
   const uniqueIps = laneList
@@ -67,10 +68,13 @@ export function OverviewPage() {
           value={
             <span>
               {formatNumber(lanesUp)}
-              <span className="text-base font-normal text-muted-foreground"> / {formatNumber(laneTotal)}</span>
+              <span className="text-base font-normal text-muted-foreground"> / {formatNumber(laneTarget)}</span>
             </span>
           }
         >
+          {laneTarget !== laneTotal ? (
+            <p className="text-xs text-muted-foreground">Connected / target · {formatNumber(laneTotal)} candidates</p>
+          ) : null}
           <div className="flex flex-wrap gap-x-3 gap-y-0.5 pt-1 text-xs text-muted-foreground">
             {LANE_STATUSES.filter((s) => s !== "up" && byStatus[s]).map((s) => (
               <span key={s} className="inline-flex items-center gap-1">
@@ -78,7 +82,7 @@ export function OverviewPage() {
                 {LANE_STATUS_META[s].label} <span className="tabular text-foreground">{byStatus[s]}</span>
               </span>
             ))}
-            {laneTotal > 0 && lanesUp === laneTotal ? <span>All lanes healthy</span> : null}
+            {laneTarget > 0 && lanesUp >= laneTarget ? <span>Target reached</span> : null}
           </div>
         </StatCard>
         <StatCard

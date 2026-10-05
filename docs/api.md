@@ -37,7 +37,7 @@ interface GatewayState { listening: boolean; activeConnections: number; pausedUn
 interface EngineStatus { connected: boolean; nodeId?: string; startedAt?: string; lastReportAt?: string }
 
 interface Overview {
-  lanes: { total: number; byStatus: Partial<Record<LaneStatus, number>> };
+  lanes: { total: number; target?: number /* pool connection target; otherwise total */; byStatus: Partial<Record<LaneStatus, number>> };
   uniqueExitIps: number;
   activeConnections: number;
   gateway: GatewayState;
@@ -154,7 +154,7 @@ interface TopItem { key: string; label: string; bytes: number; connections: numb
 | GET | /api/lanes | | `Lane[]` |
 | PATCH | /api/lanes/:id | `{ enabled }` | `Lane` |
 | POST | /api/lanes/:id/restart | | `202` |
-| POST | /api/lanes/restart-all | | `202` (lanes reconnect one at a time) |
+| POST | /api/lanes/restart-all | | `202` (lanes queue for reconnection; pool startup/fallback progress is preserved) |
 | GET | /api/lanes/random?country=us | | `Lane` (a random healthy lane) |
 | POST | /api/lanes/add | `{ locations: string[] }` (Surfshark location IDs) | `Lane[]`; pins the locations, un-removes them and raises the lane count so no existing lane is displaced |
 | DELETE | /api/lanes/:id | | `204`; Surfshark: unpins, adds to `excludeLocations`, lowers the count. WireGuard: deletes the config |
@@ -254,7 +254,8 @@ reachable and an engine reported in the last 30 s.
 ## Proxy usage (shown in the dashboard)
 
 Proxy username parameters (combinable): `USER-country-us`, `USER-session-<id>` (sticky
-lane, default 10 min), `USER-sessttl-<minutes>`, `USER-lane-<laneId>`.
+lane, default 10 min), `USER-sessttl-<minutes>`, `USER-lane-<laneId>`. A new session
+gets a lane that none of the user's other live sessions holds, while one is free.
 
 Example proxy URLs, from `AppSettings`:
 - HTTPS proxy via Traefik: `https://USER:PASS@<publicProxyHost>:<publicHttpsPort>`
