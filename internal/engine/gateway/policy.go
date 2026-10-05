@@ -11,6 +11,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/Manan-Santoki/lanepool/internal/auth"
+	"github.com/Manan-Santoki/lanepool/internal/engine/lanes"
 	"github.com/Manan-Santoki/lanepool/internal/protocol"
 )
 
@@ -144,7 +145,7 @@ type Policy struct {
 	active    map[int64]int // open connections per user
 	pending   map[int64]int64
 	usage     map[usageKey]*protocol.UsageDelta
-	sticky    map[string]stickyLane
+	sticky    map[string]map[string]stickyLane // owner -> session key -> lane
 	burned    []protocol.BurnedIP
 	autoBurn  []protocol.BurnedIP
 	failures  map[string]int // lane|domain -> consecutive dial failures
@@ -171,7 +172,7 @@ type failWindow struct {
 func NewPolicy() *Policy {
 	return &Policy{
 		users: map[string]*user{}, authCache: map[[32]byte]time.Time{}, active: map[int64]int{},
-		pending: map[int64]int64{}, usage: map[usageKey]*protocol.UsageDelta{}, sticky: map[string]stickyLane{},
+		pending: map[int64]int64{}, usage: map[usageKey]*protocol.UsageDelta{}, sticky: map[string]map[string]stickyLane{},
 		failures: map[string]int{}, authFails: map[netip.Addr]*failWindow{}, settings: protocol.DefaultSettings(),
 	}
 }
@@ -362,9 +363,11 @@ func (p *Policy) DialResult(lane, host string, ok bool) (burned *protocol.Burned
 	return &b
 }
 
-// stickyKey identifies a sticky session: the session parameter if given,
-// otherwise the client IP for users with StickyMinutes set.
-func stickyKey(u *user, params Params, client netip.Addr) (string, time.Duration) {
+// stickyKey identifies a sticky session within its user: the session parameter
+// if given, otherwise the client IP for users with StickyMinutes set. It returns
+// the owner (the lowercased username) and the key within that owner.
+func stickyKey(u *user, params Params, client netip.Addr) (string, string, time.Duration) {
+	owner := strings.ToLower(u.spec.Username)
 	ttl := time.Duration(u.spec.StickyMinutes) * time.Minute
 	if params.SessionTTL > 0 {
 		ttl = params.SessionTTL
@@ -374,43 +377,90 @@ func stickyKey(u *user, params Params, client netip.Addr) (string, time.Duration
 		if ttl == 0 {
 			ttl = 10 * time.Minute
 		}
-		return strings.ToLower(u.spec.Username) + "|s|" + params.Session, ttl
+		return owner, "s|" + params.Session, ttl
 	case ttl > 0:
-		return strings.ToLower(u.spec.Username) + "|ip|" + client.String(), ttl
+		return owner, "ip|" + client.String(), ttl
 	}
-	return "", 0
+	return owner, "", 0
 }
 
-func (p *Policy) stickyGet(key string) string {
+// stickyPick returns the lane of a sticky session, choosing and recording one
+// when the session has none or its lane is no longer a candidate. The expiry is
+// renewed on every use.
+//
+// A new choice prefers lanes that no other live session of the same user holds,
+// so N sessions get N different exit IPs while there are enough lanes. Apps
+// that keep one rate-limit budget per session rely on this: two sessions on one
+// lane would share the site's per-IP limit while the app counts them as two.
+// When a lane goes down, its session moves to a free lane rather than onto a
+// lane another session already uses. Sessions share a lane only when every
+// candidate is held.
+//
+// Choosing and recording happen under one lock, so concurrent new sessions
+// cannot both take the same free lane.
+func (p *Policy) stickyPick(owner, key string, ttl time.Duration, cands []lanes.Info, choose func([]lanes.Info) string) string {
+	now := time.Now()
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	s, ok := p.sticky[key]
-	if !ok || time.Now().After(s.expires) {
-		delete(p.sticky, key)
-		return ""
+	sessions := p.sticky[owner]
+	if sessions == nil {
+		sessions = map[string]stickyLane{}
+		p.sticky[owner] = sessions
 	}
-	return s.lane
-}
-
-func (p *Policy) stickySet(key, lane string, ttl time.Duration) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.sticky[key] = stickyLane{lane: lane, expires: time.Now().Add(ttl)}
-	if len(p.sticky) > 100000 { // drop expired entries now and then
-		now := time.Now()
-		for k, v := range p.sticky {
-			if now.After(v.expires) {
-				delete(p.sticky, k)
+	if s, ok := sessions[key]; ok && now.Before(s.expires) {
+		for _, c := range cands {
+			if c.ID == s.lane {
+				sessions[key] = stickyLane{lane: s.lane, expires: now.Add(ttl)}
+				return s.lane
 			}
 		}
 	}
+	held := map[string]bool{}
+	for k, s := range sessions {
+		switch {
+		case now.After(s.expires):
+			delete(sessions, k)
+		case k != key:
+			held[s.lane] = true
+		}
+	}
+	free := make([]lanes.Info, 0, len(cands))
+	for _, c := range cands {
+		if !held[c.ID] {
+			free = append(free, c)
+		}
+	}
+	if len(free) == 0 {
+		free = cands
+	}
+	id := choose(free)
+	sessions[key] = stickyLane{lane: id, expires: now.Add(ttl)}
+	total := 0
+	for _, m := range p.sticky {
+		total += len(m)
+	}
+	if total > 100000 { // users that went quiet keep their entries; drop expired ones now and then
+		for o, m := range p.sticky {
+			for k, s := range m {
+				if now.After(s.expires) {
+					delete(m, k)
+				}
+			}
+			if len(m) == 0 {
+				delete(p.sticky, o)
+			}
+		}
+	}
+	return id
 }
 
 // ForgetSticky drops a session mapping so the next connection gets a fresh lane.
 func (p *Policy) ForgetSticky(username, session string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	delete(p.sticky, strings.ToLower(username)+"|s|"+session)
+	if sessions := p.sticky[strings.ToLower(username)]; sessions != nil {
+		delete(sessions, "s|"+session)
+	}
 }
 
 func clientAddr(a net.Addr) netip.Addr {

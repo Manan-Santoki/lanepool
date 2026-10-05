@@ -54,6 +54,8 @@ your apps ─► lanepool proxy ──┼─► lane de-fra ─► 185.x.x.x    
   - client IP allowlists
 - **Username parameters** like commercial proxies: `alice-country-us`,
   `alice-session-abc123` (same exit for 10 minutes), `alice-sessttl-30`, `alice-lane-<id>`.
+  A user's live sessions get different lanes while there are enough of them, so
+  N sessions mean N exit IPs; they share a lane only when every lane is held.
 - **Burned-IP avoidance:** mark an exit IP as blocked by a domain, from the
   dashboard or from your app through the API, and lanepool stops using that lane
   for that domain. Repeated connection failures are detected automatically.

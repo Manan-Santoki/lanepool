@@ -308,22 +308,11 @@ func (s *Server) selectLane(req *request) string {
 		return ""
 	}
 
-	key, ttl := stickyKey(u, p, req.client)
-	if key != "" {
-		if id := s.Policy.stickyGet(key); id != "" {
-			for _, c := range cands {
-				if c.ID == id {
-					s.Policy.stickySet(key, id, ttl)
-					return id
-				}
-			}
-		}
+	choose := func(c []lanes.Info) string { return pick(c, s.cfg().Strategy, &s.rr) }
+	if owner, key, ttl := stickyKey(u, p, req.client); key != "" {
+		return s.Policy.stickyPick(owner, key, ttl, cands, choose)
 	}
-	id := pick(cands, s.cfg().Strategy, &s.rr)
-	if key != "" {
-		s.Policy.stickySet(key, id, ttl)
-	}
-	return id
+	return choose(cands)
 }
 
 func pick(cands []lanes.Info, strategy string, rr *atomic.Uint64) string {

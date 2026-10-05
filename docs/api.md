@@ -254,7 +254,8 @@ reachable and an engine reported in the last 30 s.
 ## Proxy usage (shown in the dashboard)
 
 Proxy username parameters (combinable): `USER-country-us`, `USER-session-<id>` (sticky
-lane, default 10 min), `USER-sessttl-<minutes>`, `USER-lane-<laneId>`.
+lane, default 10 min), `USER-sessttl-<minutes>`, `USER-lane-<laneId>`. A new session
+gets a lane that none of the user's other live sessions holds, while one is free.
 
 Example proxy URLs, from `AppSettings`:
 - HTTPS proxy via Traefik: `https://USER:PASS@<publicProxyHost>:<publicHttpsPort>`
