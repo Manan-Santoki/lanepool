@@ -9,8 +9,10 @@
 #   CONTROL_URL       default http://lanepool-control:8000
 #   TRUSTED_PROXIES   e.g. 10.0.1.0/24 (dokploy-network) when Traefik sends PROXY protocol
 #
-# On dokploy-network the engine is "lanepool": other apps use lanepool:8080,
-# control reaches its API at lanepool:9090.
+# On dokploy-network and lanepool-net the engine is "lanepool": other apps use
+# lanepool:8080 (join the external lanepool-net network for that), control
+# reaches its API at lanepool:9090. Create lanepool-net once (Dokploy →
+# Networks, or docker network create lanepool-net) before deploying.
 services:
   engine:
     build:
@@ -34,7 +36,13 @@ services:
     networks:
       dokploy-network:
         aliases: [lanepool]
+      # Shared with the apps that use the proxy (created in Dokploy), so they
+      # need not join dokploy-network.
+      lanepool-net:
+        aliases: [lanepool]
 
 networks:
   dokploy-network:
+    external: true
+  lanepool-net:
     external: true
