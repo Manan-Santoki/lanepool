@@ -43,6 +43,9 @@ interface FormState {
   quotaValue: string
   quotaUnit: QuotaUnit
   logDestinations: boolean
+  udpEnabled: boolean
+  idleTimeoutSeconds: string
+  logMode: "full" | "sampled" | "off"
   allowDomains: string[]
   denyDomains: string[]
   allowedCidrs: string[]
@@ -65,6 +68,9 @@ function toForm(user?: ProxyUser): FormState {
     quotaValue: quota.value,
     quotaUnit: quota.unit,
     logDestinations: user?.logDestinations ?? false,
+    udpEnabled: user?.udpEnabled ?? false,
+    idleTimeoutSeconds: String(user?.idleTimeoutSeconds ?? 0),
+    logMode: user?.logMode ?? "full",
     allowDomains: user?.allowDomains ?? [],
     denyDomains: user?.denyDomains ?? [],
     allowedCidrs: user?.allowedCidrs ?? [],
@@ -91,6 +97,9 @@ function toInput(f: FormState, isCreate: boolean): ProxyUserInput {
     connPerSecond: toInt(f.connPerSecond),
     quotaBytes: quotaToBytes(f.quotaValue, f.quotaUnit),
     logDestinations: f.logDestinations,
+    udpEnabled: f.udpEnabled,
+    idleTimeoutSeconds: toInt(f.idleTimeoutSeconds),
+    logMode: f.logMode,
     allowDomains: f.allowDomains,
     denyDomains: f.denyDomains,
     allowedCidrs: f.allowedCidrs,
@@ -396,6 +405,44 @@ function UserForm({
                 </SelectContent>
               </Select>
             </div>
+          </FormField>
+          <label htmlFor="u-udp" className="flex items-start justify-between gap-4 rounded-md border p-3">
+            <span className="space-y-1">
+              <span className="block text-sm font-medium">SOCKS5 UDP (torrent / DHT)</span>
+              <span className="block text-xs text-muted-foreground">
+                Allow SOCKS5 UDP ASSOCIATE for this user (needed for qBittorrent DHT and uTP).
+              </span>
+            </span>
+            <Switch id="u-udp" checked={form.udpEnabled} onCheckedChange={(v) => set("udpEnabled", v)} />
+          </label>
+          <FormField
+            label="Idle timeout override"
+            htmlFor="u-idle"
+            unit="seconds"
+            error={errors.idleTimeoutSeconds}
+            description="Per-connection or UDP association idle time. 0 = use engine default."
+          >
+            <Input
+              id="u-idle"
+              type="number"
+              inputMode="numeric"
+              min={0}
+              value={form.idleTimeoutSeconds}
+              onChange={(e) => set("idleTimeoutSeconds", e.target.value)}
+              className="tabular max-w-40"
+            />
+          </FormField>
+          <FormField label="Connection logging" htmlFor="u-logmode" error={errors.logMode} description="How often to store connection log rows. UDP never logs per packet.">
+            <Select value={form.logMode} onValueChange={(v) => set("logMode", v as FormState["logMode"])}>
+              <SelectTrigger id="u-logmode" className="max-w-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="full">Full</SelectItem>
+                <SelectItem value="sampled">Sampled (~1%)</SelectItem>
+                <SelectItem value="off">Off</SelectItem>
+              </SelectContent>
+            </Select>
           </FormField>
           <label htmlFor="u-logdest" className="flex items-start justify-between gap-4 rounded-md border p-3">
             <span className="space-y-1">

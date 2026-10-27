@@ -52,6 +52,7 @@ const PACING: NumField[] = [
 
 const HEALTH: NumField[] = [
   { key: "ipCheckInterval", label: "IP check interval", unit: "seconds", help: "How often each lane re-checks its exit IP and latency. Server pools look up each tunnel only once, with no repeated probes or lookup retries. 0 = no lookups." },
+  { key: "maxLanesUp", label: "Max lanes up", unit: "count", min: 0, help: "Cap how many WireGuard lanes may be connected at once (0 = unlimited). Use with Surfshark key limits; applies with or without server pool mode." },
 ]
 
 const TIMEOUTS: NumField[] = [

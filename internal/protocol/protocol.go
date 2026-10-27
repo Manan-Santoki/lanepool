@@ -72,7 +72,17 @@ type EngineSettings struct {
 	// TargetUp > 0 turns the lanes into a pool: the engine keeps this many up and
 	// leaves the rest on standby, starting another one whenever a lane fails.
 	TargetUp int `json:"targetUp,omitempty"`
+	// MaxLanesUp caps how many lanes may be up at once (0 = unlimited). When both
+	// TargetUp and MaxLanesUp are set, the lower value applies.
+	MaxLanesUp int `json:"maxLanesUp,omitempty"`
 }
+
+// Connection log modes for proxy users.
+const (
+	LogModeFull    = "full"
+	LogModeSampled = "sampled"
+	LogModeOff     = "off"
+)
 
 // DefaultSettings are the defaults; pacing matches what v1 learned in production.
 func DefaultSettings() EngineSettings {
@@ -138,6 +148,9 @@ type UserSpec struct {
 	QuotaBytes       int64      `json:"quotaBytes"`             // per period; 0 = unlimited
 	UsedBytes        int64      `json:"usedBytes"`              // used this period, as known to control
 	LogDestinations  bool       `json:"logDestinations"`
+	UDPEnabled       bool       `json:"udpEnabled"`
+	IdleTimeoutSec   int        `json:"idleTimeoutSeconds"` // 0 = engine default
+	LogMode          string     `json:"logMode"`            // full, sampled, off
 }
 
 // BurnedIP marks a lane as blocked by a domain until ExpiresAt.

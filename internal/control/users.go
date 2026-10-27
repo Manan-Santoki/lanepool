@@ -34,6 +34,9 @@ type ProxyUser struct {
 	UsedBytes         int64      `json:"usedBytes"`
 	PeriodStart       time.Time  `json:"periodStart"`
 	LogDestinations   bool       `json:"logDestinations"`
+	UDPEnabled        bool       `json:"udpEnabled"`
+	IdleTimeoutSec    int        `json:"idleTimeoutSeconds"`
+	LogMode           string     `json:"logMode"`
 	ActiveConnections int        `json:"activeConnections"`
 	CreatedAt         time.Time  `json:"createdAt"`
 	UpdatedAt         time.Time  `json:"updatedAt"`
@@ -43,14 +46,15 @@ type ProxyUser struct {
 
 const userCols = `id, username, enabled, note, expires_at, allowed_countries, allowed_lanes, allow_domains,
 	deny_domains, allowed_cidrs, sticky_minutes, max_connections, conn_per_second, quota_bytes, used_bytes,
-	period_start, log_destinations, created_at, updated_at, last_seen_at, password_hash`
+	period_start, log_destinations, udp_enabled, idle_timeout_seconds, log_mode,
+	created_at, updated_at, last_seen_at, password_hash`
 
 func scanUser(row pgx.Row) (*ProxyUser, error) {
 	var u ProxyUser
 	err := row.Scan(&u.ID, &u.Username, &u.Enabled, &u.Note, &u.ExpiresAt, &u.AllowedCountries, &u.AllowedLanes,
 		&u.AllowDomains, &u.DenyDomains, &u.AllowedCIDRs, &u.StickyMinutes, &u.MaxConnections, &u.ConnPerSecond,
-		&u.QuotaBytes, &u.UsedBytes, &u.PeriodStart, &u.LogDestinations, &u.CreatedAt, &u.UpdatedAt, &u.LastSeenAt,
-		&u.passwordHash)
+		&u.QuotaBytes, &u.UsedBytes, &u.PeriodStart, &u.LogDestinations, &u.UDPEnabled, &u.IdleTimeoutSec, &u.LogMode,
+		&u.CreatedAt, &u.UpdatedAt, &u.LastSeenAt, &u.passwordHash)
 	return &u, err
 }
 
@@ -116,6 +120,9 @@ type userInput struct {
 	ConnPerSecond    *float64   `json:"connPerSecond"`
 	QuotaBytes       *int64     `json:"quotaBytes"`
 	LogDestinations  *bool      `json:"logDestinations"`
+	UDPEnabled       *bool      `json:"udpEnabled"`
+	IdleTimeoutSec   *int       `json:"idleTimeoutSeconds"`
+	LogMode          *string    `json:"logMode"`
 }
 
 // Usernames may contain hyphens, but not the parameter keywords that the
@@ -209,6 +216,14 @@ func (in *userInput) validate(creating bool) map[string]string {
 	if in.QuotaBytes != nil && *in.QuotaBytes < 0 {
 		f["quotaBytes"] = "can't be negative"
 	}
+	nonNeg("idleTimeoutSeconds", in.IdleTimeoutSec)
+	if in.LogMode != nil {
+		switch *in.LogMode {
+		case protocol.LogModeFull, protocol.LogModeSampled, protocol.LogModeOff:
+		default:
+			f["logMode"] = "must be full, sampled or off"
+		}
+	}
 	return f
 }
 
@@ -270,11 +285,14 @@ func (s *Server) applyUserUpdate(ctx context.Context, id int64, in userInput) (*
 		conn_per_second = COALESCE($14, conn_per_second),
 		quota_bytes = COALESCE($15, quota_bytes),
 		log_destinations = COALESCE($16, log_destinations),
+		udp_enabled = COALESCE($17, udp_enabled),
+		idle_timeout_seconds = COALESCE($18, idle_timeout_seconds),
+		log_mode = COALESCE($19, log_mode),
 		updated_at = now()
 		WHERE id = $1 RETURNING `+userCols,
 		id, in.Username, in.Enabled, in.Note, in.ClearExpiry, in.ExpiresAt, in.AllowedCountries, in.AllowedLanes,
 		in.AllowDomains, in.DenyDomains, in.AllowedCIDRs, in.StickyMinutes, in.MaxConnections, in.ConnPerSecond,
-		in.QuotaBytes, in.LogDestinations))
+		in.QuotaBytes, in.LogDestinations, in.UDPEnabled, in.IdleTimeoutSec, in.LogMode))
 }
 
 func (s *Server) updateUser(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -392,5 +410,6 @@ func (u *ProxyUser) spec() protocol.UserSpec {
 		DenyDomains: u.DenyDomains, AllowedCIDRs: u.AllowedCIDRs, StickyMinutes: u.StickyMinutes,
 		MaxConnections: u.MaxConnections, ConnPerSecond: u.ConnPerSecond, QuotaBytes: u.QuotaBytes,
 		UsedBytes: u.UsedBytes, LogDestinations: u.LogDestinations,
+		UDPEnabled: u.UDPEnabled, IdleTimeoutSec: u.IdleTimeoutSec, LogMode: u.LogMode,
 	}
 }

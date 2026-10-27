@@ -180,6 +180,7 @@ func validateEngineSettings(e protocol.EngineSettings) map[string]string {
 	check("idleTimeout", e.IdleTimeout, 10, 86400)
 	check("autoBurnFailures", e.AutoBurnFailures, 0, 100)
 	check("autoBurnTtl", e.AutoBurnTTL, 60, 30*86400)
+	check("maxLanesUp", e.MaxLanesUp, 0, 500)
 	if e.IPCheckURL != "" {
 		if u, err := url.Parse(e.IPCheckURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			f["engine.ipCheckUrl"] = "must be an http(s) URL"

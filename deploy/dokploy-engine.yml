@@ -39,6 +39,12 @@ services:
       LANES_TOKEN: ${LANES_TOKEN:-}
       LANES_STATE_FILE: /data/known-lanes.json
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      UDP_ADVERTISE_HOST: ${UDP_ADVERTISE_HOST:-lanepool}
+      UDP_ADVERTISE_IP: ${UDP_ADVERTISE_IP:-}
+      UDP_RELAY_PORT_MIN: ${UDP_RELAY_PORT_MIN:-30000}
+      UDP_RELAY_PORT_MAX: ${UDP_RELAY_PORT_MAX:-30100}
+    expose:
+      - "30000-30100/udp"
     volumes:
       - engine-data:/data
     ulimits:

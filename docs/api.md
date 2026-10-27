@@ -68,6 +68,9 @@ interface ProxyUser {
   quotaBytes: number;          // per period, 0 = unlimited
   usedBytes: number; periodStart: string;
   logDestinations: boolean;    // record target host:port in connection logs
+  udpEnabled: boolean;         // SOCKS5 UDP ASSOCIATE
+  idleTimeoutSeconds: number;  // 0 = engine default
+  logMode: "full" | "sampled" | "off";
   activeConnections: number;
   createdAt: string; updatedAt: string; lastSeenAt?: string;
 }
@@ -113,6 +116,7 @@ interface EngineSettings {
   retryBackoff: number; retryBackoffMax: number; breakerFailures: number; breakerPause: number;
   handshakeMaxAge: number; ipCheckUrl: string; ipCheckInterval: number;
   dialTimeout: number; idleTimeout: number; autoBurnFailures: number; autoBurnTtl: number;  // durations in seconds
+  maxLanesUp?: number;  // cap lanes up at once; 0 = unlimited
 }
 interface AppSettings {
   logRetentionDays: number;        // connection logs; default 7

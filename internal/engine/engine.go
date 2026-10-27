@@ -44,6 +44,11 @@ type Config struct {
 	// StateFile keeps the lanes that worked across restarts (in-process lanes
 	// only; the lanes process keeps its own). Empty = off.
 	StateFile string
+
+	UDPAdvertiseHost string
+	UDPAdvertiseIP   string
+	UDPRelayPortMin  int
+	UDPRelayPortMax  int
 }
 
 // LaneSet is what the engine needs from its lanes: an in-process lanes.Manager
@@ -100,9 +105,22 @@ func New(cfg Config, log *slog.Logger) (*Engine, error) {
 		ls = local
 	}
 	p := gateway.NewPolicy()
+	var advIP netip.Addr
+	if cfg.UDPAdvertiseIP != "" {
+		advIP, _ = netip.ParseAddr(cfg.UDPAdvertiseIP)
+	}
+	gw := &gateway.Server{
+		Policy: p, Lanes: ls, Log: log, TrustedProxies: cfg.TrustedProxies,
+		UDP: gateway.UDPConfig{
+			AdvertiseHost: cfg.UDPAdvertiseHost,
+			AdvertiseIP:   advIP,
+			PortMin:       cfg.UDPRelayPortMin,
+			PortMax:       cfg.UDPRelayPortMax,
+		},
+	}
 	return &Engine{
 		cfg: cfg, log: log, lanes: ls, local: local, policy: p, started: time.Now(),
-		gw:     &gateway.Server{Policy: p, Lanes: ls, Log: log, TrustedProxies: cfg.TrustedProxies},
+		gw:     gw,
 		client: &http.Client{Timeout: 15 * time.Second},
 		reload: make(chan struct{}, 1),
 	}, nil
@@ -427,7 +445,12 @@ func (e *Engine) metrics() *prometheus.Registry {
 	laneStatus := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "lanepool_lanes", Help: "Lanes by status."}, []string{"status"})
 	active := prometheus.NewGauge(prometheus.GaugeOpts{Name: "lanepool_active_connections", Help: "Open proxy connections."})
 	paused := prometheus.NewGauge(prometheus.GaugeOpts{Name: "lanepool_new_lanes_paused", Help: "1 while the circuit breaker blocks new lane connections."})
-	reg.MustRegister(laneStatus, active, paused)
+	udpAssoc := prometheus.NewGauge(prometheus.GaugeOpts{Name: "lanepool_udp_associations", Help: "Open SOCKS5 UDP associations."})
+	udpPkts := prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "lanepool_udp_packets_total", Help: "SOCKS5 UDP relay packets processed."}, func() float64 {
+		_, p := e.gw.UDPStats()
+		return float64(p)
+	})
+	reg.MustRegister(laneStatus, active, paused, udpAssoc, udpPkts)
 	counts := map[string]float64{}
 	for _, s := range e.lanes.States() {
 		counts[s.Status]++
@@ -436,6 +459,8 @@ func (e *Engine) metrics() *prometheus.Registry {
 		laneStatus.WithLabelValues(st).Set(counts[st])
 	}
 	active.Set(float64(len(e.gw.Live())))
+	assoc, _ := e.gw.UDPStats()
+	udpAssoc.Set(float64(assoc))
 	if !e.lanes.PausedUntil().IsZero() {
 		paused.Set(1)
 	}

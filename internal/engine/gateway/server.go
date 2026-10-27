@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -26,6 +25,7 @@ import (
 
 	"github.com/pires/go-proxyproto"
 
+	"github.com/Manan-Santoki/lanepool/internal/engine/gateway/socks5"
 	"github.com/Manan-Santoki/lanepool/internal/engine/lanes"
 	"github.com/Manan-Santoki/lanepool/internal/protocol"
 )
@@ -34,6 +34,7 @@ import (
 type Lanes interface {
 	Usable() []lanes.Info
 	Dial(ctx context.Context, id, address string) (net.Conn, func(), error)
+	ListenPacket(ctx context.Context, id string) (net.PacketConn, func(), error)
 }
 
 // Server is the proxy listener.
@@ -44,9 +45,14 @@ type Server struct {
 	// TrustedProxies may send a PROXY protocol header carrying the real client
 	// address (e.g. Traefik in front of the gateway).
 	TrustedProxies []netip.Prefix
+	UDP            UDPConfig
 
 	settings atomic.Pointer[protocol.EngineSettings]
 	rr       atomic.Uint64
+
+	udpPorts        *portPool
+	udpAssociations atomic.Int64
+	udpPackets      atomic.Uint64
 
 	mu       sync.Mutex
 	ln       net.Listener
@@ -368,7 +374,17 @@ func (s *Server) finish(req *request, result string, err error) {
 	if req.user != nil {
 		s.Policy.CountConnection(req.user.spec.ID, req.rec.LaneID, result != protocol.ResultOK)
 	}
-	s.record(req.rec)
+	if req.user == nil || s.shouldLogConn(req.user) {
+		s.record(req.rec)
+	}
+}
+
+// UDPStats returns SOCKS5 UDP relay counters for metrics.
+func (s *Server) UDPStats() (associations int64, packets uint64) {
+	if s == nil {
+		return 0, 0
+	}
+	return s.udpAssociations.Load(), s.udpPackets.Load()
 }
 
 // relay pipes data between client and upstream until either side closes, the
@@ -391,7 +407,11 @@ func (s *Server) relay(ctx context.Context, req *request, client net.Conn, clien
 	}()
 
 	client.SetDeadline(time.Time{})
-	idle := time.Duration(s.cfg().IdleTimeout) * time.Second
+	idleSec := s.cfg().IdleTimeout
+	if req.user != nil && req.user.spec.IdleTimeoutSec > 0 {
+		idleSec = req.user.spec.IdleTimeoutSec
+	}
+	idle := time.Duration(idleSec) * time.Second
 	if idle <= 0 {
 		idle = 5 * time.Minute
 	}
@@ -650,42 +670,24 @@ func (s *Server) handleSOCKS(c net.Conn, br *bufio.Reader, req *request) {
 	if _, err := io.ReadFull(br, head); err != nil {
 		return
 	}
-	if head[1] != 0x01 {
+	switch head[1] {
+	case 0x03:
+		if _, _, err := socks5.ReadAddr(head[3], br); err != nil {
+			return
+		}
+		s.handleSOCKSAssociate(c, req, string(uname), string(passwd))
+		return
+	case 0x01:
+	default:
 		socksReply(c, socksCmdUnsupported)
 		return
 	}
-	switch head[3] {
-	case 0x01:
-		b := make([]byte, 4)
-		if _, err := io.ReadFull(br, b); err != nil {
-			return
-		}
-		req.host = netip.AddrFrom4([4]byte(b)).String()
-	case 0x04:
-		b := make([]byte, 16)
-		if _, err := io.ReadFull(br, b); err != nil {
-			return
-		}
-		req.host = netip.AddrFrom16([16]byte(b)).String()
-	case 0x03:
-		n, err := br.ReadByte()
-		if err != nil {
-			return
-		}
-		b := make([]byte, n)
-		if _, err := io.ReadFull(br, b); err != nil {
-			return
-		}
-		req.host = string(b)
-	default:
-		socksReply(c, socksAddrUnsupport)
+	host, port, err := socks5.ReadAddr(head[3], br)
+	if err != nil {
 		return
 	}
-	pb := make([]byte, 2)
-	if _, err := io.ReadFull(br, pb); err != nil {
-		return
-	}
-	req.port = strconv.Itoa(int(binary.BigEndian.Uint16(pb)))
+	req.host = host
+	req.port = strconv.Itoa(int(port))
 
 	laneID, release, res := s.admit(req, string(uname), string(passwd))
 	if res != "" {

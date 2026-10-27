@@ -40,6 +40,7 @@ import (
 // Tunnel is the part of wg.Tunnel the manager uses (replaceable in tests).
 type Tunnel interface {
 	DialContext(ctx context.Context, network, address string) (net.Conn, error)
+	ListenPacket(ctx context.Context, network, address string) (net.PacketConn, error)
 	Stats() wg.Stats
 	Close()
 }
@@ -60,6 +61,20 @@ const (
 	poolRetryStep     = 30 * time.Second
 	poolBurstRounds   = 3
 )
+
+// laneCap is how many lanes may be up or connecting at once (0 = unlimited).
+func laneCap(s protocol.EngineSettings) int {
+	if s.TargetUp > 0 {
+		if s.MaxLanesUp > 0 && s.MaxLanesUp < s.TargetUp {
+			return s.MaxLanesUp
+		}
+		return s.TargetUp
+	}
+	if s.MaxLanesUp > 0 {
+		return s.MaxLanesUp
+	}
+	return 0
+}
 
 type lane struct {
 	spec    protocol.LaneSpec
@@ -289,7 +304,7 @@ func (m *Manager) Tick(ctx context.Context) {
 // tunnel must not be dropped just because its replacement is still connecting.
 // Caller holds m.mu.
 func (m *Manager) trimPool() {
-	target := m.settings.TargetUp
+	target := laneCap(m.settings)
 	if target <= 0 {
 		return
 	}
@@ -367,7 +382,8 @@ func (m *Manager) launch(ctx context.Context, now time.Time) {
 			}
 			m.burstActive = false
 		}
-		if up >= s.TargetUp {
+		cap := laneCap(s)
+		if cap > 0 && up >= cap {
 			// Replacements and later target increases use fallback, even when the
 			// target was reached before all three startup rounds were needed.
 			if !m.fallback {
@@ -389,7 +405,10 @@ func (m *Manager) launch(ctx context.Context, now time.Time) {
 		if connecting > 0 {
 			return
 		}
-		limit = s.TargetUp - up
+		limit = laneCap(s) - up
+		if limit < 1 {
+			limit = 1
+		}
 		delay = 0
 	} else if pool {
 		limit = 1
@@ -418,7 +437,11 @@ func (m *Manager) launch(ctx context.Context, now time.Time) {
 		m.event("info", "pool.burst", "", fmt.Sprintf("connection burst %d/%d: trying up to %d servers with %d/%d lanes already up", m.burstRounds, poolBurstRounds, min(limit, len(due)), up, s.TargetUp))
 	}
 	for _, l := range due {
-		if connecting >= limit || (pool && up+connecting >= s.TargetUp) {
+		cap := laneCap(s)
+		if connecting >= limit || (pool && cap > 0 && up+connecting >= cap) {
+			return
+		}
+		if !pool && cap > 0 && up+connecting >= cap {
 			return
 		}
 		m.nextLaunch = now.Add(delay)
@@ -697,6 +720,35 @@ func (m *Manager) Dial(ctx context.Context, id, address string) (net.Conn, func(
 	}
 	var once sync.Once
 	return conn, func() { once.Do(func() { l.active.Add(-1) }) }, nil
+}
+
+// ListenPacket opens a UDP socket through lane id. The release function must be
+// called when the socket is closed.
+func (m *Manager) ListenPacket(ctx context.Context, id string) (net.PacketConn, func(), error) {
+	m.mu.Lock()
+	l, ok := m.lanes[id]
+	var tun Tunnel
+	if ok && l.status == protocol.LaneUp {
+		tun = l.tun
+	}
+	m.mu.Unlock()
+	if tun == nil {
+		return nil, nil, ErrNoLane
+	}
+	l.active.Add(1)
+	pc, err := tun.ListenPacket(ctx, "udp", "0.0.0.0:0")
+	if err != nil {
+		l.active.Add(-1)
+		return nil, nil, err
+	}
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			pc.Close()
+			l.active.Add(-1)
+		})
+	}
+	return pc, release, nil
 }
 
 // ExitIP returns the last known exit IP of a lane.
