@@ -50,9 +50,9 @@ type Server struct {
 	settings atomic.Pointer[protocol.EngineSettings]
 	rr       atomic.Uint64
 
-	udpPorts         *portPool
-	udpAssociations  atomic.Int64
-	udpPackets       atomic.Uint64
+	udpPorts        *portPool
+	udpAssociations atomic.Int64
+	udpPackets      atomic.Uint64
 
 	mu       sync.Mutex
 	ln       net.Listener
