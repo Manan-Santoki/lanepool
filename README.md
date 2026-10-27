@@ -137,6 +137,9 @@ For two containers, use `lanepool control` and `lanepool engine`, as in
 | `LISTEN` / `PROXY_LISTEN` / `ENGINE_LISTEN` | | `:8000` / `:8080` / `:9090` |
 | `COOKIE_SECURE` | control | `false`; set `true` behind HTTPS |
 | `TRUSTED_PROXIES` | engine | CIDRs allowed to send PROXY protocol headers |
+| `UDP_ADVERTISE_HOST` | engine | Hostname returned in SOCKS5 UDP ASSOCIATE replies (default `lanepool` on Dokploy) |
+| `UDP_ADVERTISE_IP` | engine | Optional IP override for ASSOCIATE bind address in replies |
+| `UDP_RELAY_PORT_MIN` / `UDP_RELAY_PORT_MAX` | engine | Host-side UDP relay port range (default `30000`–`30100`); expose on the internal Docker network only |
 | `LANES_URL` | engine | empty (lanes in the engine); `http://lanepool-lanes:9191` for a lanes process |
 | `LANES_TOKEN` | engine, lanes | `ENGINE_TOKEN` |
 | `LANES_LISTEN` | lanes | `:9191` |
@@ -151,8 +154,14 @@ docker compose exec control lanepool admin create --email you@example.com
 
 ## Exposing the proxy
 
-The engine's port 8080 speaks plain HTTP and SOCKS5. To use it from other
-machines, put TLS in front: [`deploy/traefik-public-proxy.yml`](deploy/traefik-public-proxy.yml)
+The engine's port 8080 speaks plain HTTP and SOCKS5 (TCP CONNECT and UDP
+ASSOCIATE when enabled per user). UDP relay ports are separate (see
+`UDP_RELAY_PORT_*`); they must be reachable on your internal Docker network
+(e.g. `dokploy-network`) for torrent clients — Traefik TLS on 443 cannot carry
+UDP. Verify with `go run ./cmd/udpcheck -proxy lanepool:8080 -user … -pass …`
+from a container on that network.
+
+To use the proxy from other machines over the internet, put TLS in front: [`deploy/traefik-public-proxy.yml`](deploy/traefik-public-proxy.yml)
 turns Traefik into an HTTPS proxy endpoint (`https://USER:PASS@proxy.example.com`)
 and passes real client IPs to lanepool with PROXY protocol. Always use strong
 proxy passwords; open proxies are found and abused within hours.

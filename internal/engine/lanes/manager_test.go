@@ -325,6 +325,9 @@ func (t *poolTunnel) DialContext(context.Context, string, string) (net.Conn, err
 	t.dials.Add(1)
 	return nil, fmt.Errorf("test destination unavailable")
 }
+func (t *poolTunnel) ListenPacket(context.Context, string, string) (net.PacketConn, error) {
+	return nil, fmt.Errorf("test destination unavailable")
+}
 
 type poolHarness struct {
 	m      *Manager

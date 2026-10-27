@@ -156,6 +156,8 @@ func engineConfig() (engine.Config, error) {
 	if err != nil {
 		return engine.Config{}, err
 	}
+	minPort, _ := strconv.Atoi(env("UDP_RELAY_PORT_MIN", "30000"))
+	maxPort, _ := strconv.Atoi(env("UDP_RELAY_PORT_MAX", "30100"))
 	return engine.Config{
 		NodeID:         env("NODE_ID", hostname()),
 		ControlURL:     env("CONTROL_URL", "http://localhost:8000"),
@@ -166,6 +168,10 @@ func engineConfig() (engine.Config, error) {
 		LanesURL:       os.Getenv("LANES_URL"),
 		LanesToken:     env("LANES_TOKEN", os.Getenv("ENGINE_TOKEN")),
 		StateFile:      os.Getenv("LANES_STATE_FILE"),
+		UDPAdvertiseHost: env("UDP_ADVERTISE_HOST", "lanepool"),
+		UDPAdvertiseIP:   os.Getenv("UDP_ADVERTISE_IP"),
+		UDPRelayPortMin:  minPort,
+		UDPRelayPortMax:  maxPort,
 	}, nil
 }
 

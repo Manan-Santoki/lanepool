@@ -356,6 +356,11 @@ func (c *Client) RestartAll() {
 	}
 }
 
+// ListenPacket is not supported when lanes run in a separate process.
+func (c *Client) ListenPacket(context.Context, string) (net.PacketConn, func(), error) {
+	return nil, nil, errors.New("socks5 udp associate requires in-process lanes (unset LANES_URL)")
+}
+
 // Dial connects to address through lane id, via the lanes process.
 func (c *Client) Dial(ctx context.Context, id, address string) (net.Conn, func(), error) {
 	var d net.Dialer

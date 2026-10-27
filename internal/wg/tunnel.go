@@ -177,6 +177,16 @@ func (t *Tunnel) ListenUDP(addr netip.AddrPort) (net.PacketConn, error) {
 	return t.net.ListenUDPAddrPort(addr)
 }
 
+// ListenPacket opens a UDP socket through the tunnel stack (address is ignored; binds :0).
+func (t *Tunnel) ListenPacket(_ context.Context, network, _ string) (net.PacketConn, error) {
+	switch network {
+	case "udp", "udp4", "":
+		return t.net.ListenUDP(&net.UDPAddr{IP: net.IPv4zero, Port: 0})
+	default:
+		return nil, fmt.Errorf("wg: unsupported packet network %q", network)
+	}
+}
+
 // Stats reads the peer state from the device.
 func (t *Tunnel) Stats() Stats {
 	var s Stats

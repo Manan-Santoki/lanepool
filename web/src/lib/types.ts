@@ -53,6 +53,9 @@ export interface ProxyUser {
   quotaBytes: number;          // per period, 0 = unlimited
   usedBytes: number; periodStart: string;
   logDestinations: boolean;    // record target host:port in connection logs
+  udpEnabled: boolean;
+  idleTimeoutSeconds: number;
+  logMode: "full" | "sampled" | "off";
   activeConnections: number;
   createdAt: string; updatedAt: string; lastSeenAt?: string;
 }
@@ -95,6 +98,7 @@ export interface EngineSettings {
   retryBackoff: number; retryBackoffMax: number; breakerFailures: number; breakerPause: number;
   handshakeMaxAge: number; ipCheckUrl: string; ipCheckInterval: number;
   dialTimeout: number; idleTimeout: number; autoBurnFailures: number; autoBurnTtl: number;  // durations in seconds
+  maxLanesUp?: number;
 }
 export interface AppSettings {
   logRetentionDays: number;        // connection logs; default 7
