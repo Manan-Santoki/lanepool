@@ -35,6 +35,7 @@ type Lanes interface {
 	Usable() []lanes.Info
 	Dial(ctx context.Context, id, address string) (net.Conn, func(), error)
 	ListenPacket(ctx context.Context, id string) (net.PacketConn, func(), error)
+	LookupHost(ctx context.Context, id, host string) (netip.Addr, error)
 }
 
 // Server is the proxy listener.
@@ -53,6 +54,7 @@ type Server struct {
 	udpPorts        *portPool
 	udpAssociations atomic.Int64
 	udpPackets      atomic.Uint64
+	udpDrops        atomic.Uint64
 
 	mu       sync.Mutex
 	ln       net.Listener
@@ -385,6 +387,14 @@ func (s *Server) UDPStats() (associations int64, packets uint64) {
 		return 0, 0
 	}
 	return s.udpAssociations.Load(), s.udpPackets.Load()
+}
+
+// UDPDrops returns datagrams dropped by the SOCKS5 UDP relay (parse/resolve/write failures).
+func (s *Server) UDPDrops() uint64 {
+	if s == nil {
+		return 0
+	}
+	return s.udpDrops.Load()
 }
 
 // relay pipes data between client and upstream until either side closes, the

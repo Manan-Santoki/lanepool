@@ -26,6 +26,8 @@ var (
 	ClientAddr = netip.MustParseAddr("10.14.0.2")
 	WebAddr    = netip.MustParseAddr("198.51.100.7")  // answers HTTP on :80 and echoes on :7
 	DNSAddr    = netip.MustParseAddr("198.51.100.53") // answers every A query with WebAddr
+	// ResolverHost resolves to DNSAddr via the fake provider's DNS (for SOCKS5 domain ATYP tests).
+	ResolverHost = "resolver.wgtest"
 )
 
 // KeyPair returns a new base64 private and public key.
@@ -167,8 +169,12 @@ func serveDNS(pc net.PacketConn) {
 		b.Question(q)
 		b.StartAnswers()
 		if q.Type == dnsmessage.TypeA {
+			a := WebAddr.As4()
+			if q.Name.String() == ResolverHost+"." {
+				a = DNSAddr.As4()
+			}
 			b.AResource(dnsmessage.ResourceHeader{Name: q.Name, Class: dnsmessage.ClassINET, TTL: 60},
-				dnsmessage.AResource{A: WebAddr.As4()})
+				dnsmessage.AResource{A: a})
 		}
 		msg, err := b.Finish()
 		if err == nil {

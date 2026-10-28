@@ -26,7 +26,7 @@ func main() {
 	proxyAddr := flag.String("proxy", "lanepool:8080", "SOCKS5 proxy host:port")
 	user := flag.String("user", "", "proxy username")
 	pass := flag.String("pass", "", "proxy password")
-	dnsHost := flag.String("dns", "1.1.1.1", "DNS server for UDP query test")
+	dnsHost := flag.String("dns", "1.1.1.1", "DNS server for UDP query test (IPv4 ATYP)")
 	dhtHost := flag.String("dht", "router.bittorrent.com", "DHT bootstrap host")
 	flag.Parse()
 	if *user == "" || *pass == "" {
@@ -49,13 +49,39 @@ func main() {
 	defer ctrl.Close()
 	fmt.Printf("udp relay %s:%s (keep control connection open)\n", relayHost, relayPort)
 
-	if err := dnsCheck(relayHost, relayPort, *dnsHost); err != nil {
+	uc, err := net.Dial("udp", net.JoinHostPort(relayHost, relayPort))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "udp relay socket: %v\n", err)
+		os.Exit(1)
+	}
+	defer uc.Close()
+
+	if err := dnsCheck(uc, *dnsHost); err != nil {
 		fmt.Fprintf(os.Stderr, "dns: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Println("dns: ok")
 
-	if err := dhtPing(relayHost, relayPort, *dhtHost); err != nil {
+	if err := dnsDomainCheck(uc); err != nil {
+		fmt.Fprintf(os.Stderr, "dns domain ATYP: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("dns domain ATYP (dns.google): ok")
+
+	udpIP, err := udpExitIP(uc)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "udp exit ip: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("udp exit IP:", udpIP)
+	if strings.TrimSpace(udpIP) == strings.TrimSpace(exitIP) {
+		fmt.Println("tcp/udp exit IP: match")
+	} else {
+		fmt.Println("tcp/udp exit IP: MISMATCH")
+		os.Exit(1)
+	}
+
+	if err := dhtPing(uc, *dhtHost); err != nil {
 		fmt.Fprintf(os.Stderr, "dht ping: %v (non-fatal)\n", err)
 	} else {
 		fmt.Println("dht ping: ok")
@@ -92,7 +118,7 @@ func associate(proxyAddr, user, pass string) (string, string, net.Conn, error) {
 	if err != nil {
 		return "", "", nil, err
 	}
-	if _, err = ctrl.Write([]byte{0x05, 0x01, 0x00, 0x02}); err != nil {
+	if _, err = ctrl.Write([]byte{0x05, 0x01, 0x02}); err != nil {
 		ctrl.Close()
 		return "", "", nil, err
 	}
@@ -100,6 +126,10 @@ func associate(proxyAddr, user, pass string) (string, string, net.Conn, error) {
 	if _, err = io.ReadFull(ctrl, resp); err != nil {
 		ctrl.Close()
 		return "", "", nil, err
+	}
+	if resp[0] != 0x05 || resp[1] != 0x02 {
+		ctrl.Close()
+		return "", "", nil, fmt.Errorf("socks method: %v", resp)
 	}
 	u, p := []byte(user), []byte(pass)
 	auth := []byte{0x01, byte(len(u))}
@@ -135,7 +165,7 @@ func associate(proxyAddr, user, pass string) (string, string, net.Conn, error) {
 	return host, strconv.Itoa(int(port)), ctrl, nil
 }
 
-func dnsCheck(relayHost, relayPort, dnsServer string) error {
+func dnsCheck(uc net.Conn, dnsServer string) error {
 	var msg dnsmessage.Message
 	msg.Header.ID = 0xbeef
 	msg.Header.RecursionDesired = true
@@ -152,12 +182,93 @@ func dnsCheck(relayHost, relayPort, dnsServer string) error {
 	if err != nil {
 		return err
 	}
-	uc, err := net.Dial("udp", net.JoinHostPort(relayHost, relayPort))
+	return udpRoundTrip(uc, wrapped, func(payload []byte) error {
+		var resp dnsmessage.Message
+		return resp.Unpack(payload)
+	})
+}
+
+func dnsDomainCheck(uc net.Conn) error {
+	var msg dnsmessage.Message
+	msg.Header.ID = 0xcafe
+	msg.Header.RecursionDesired = true
+	msg.Questions = []dnsmessage.Question{{
+		Name:  dnsmessage.MustNewName("example.com."),
+		Type:  dnsmessage.TypeA,
+		Class: dnsmessage.ClassINET,
+	}}
+	q, err := msg.Pack()
 	if err != nil {
 		return err
 	}
-	defer uc.Close()
-	uc.SetDeadline(time.Now().Add(10 * time.Second))
+	wrapped, err := socks5.BuildUDP("dns.google", 53, q)
+	if err != nil {
+		return err
+	}
+	return udpRoundTrip(uc, wrapped, func(payload []byte) error {
+		var resp dnsmessage.Message
+		return resp.Unpack(payload)
+	})
+}
+
+func udpExitIP(uc net.Conn) (string, error) {
+	var msg dnsmessage.Message
+	msg.Header.ID = 0xface
+	msg.Questions = []dnsmessage.Question{{
+		Name:  dnsmessage.MustNewName("o-o.myaddr.l.google.com."),
+		Type:  dnsmessage.TypeTXT,
+		Class: dnsmessage.ClassINET,
+	}}
+	q, err := msg.Pack()
+	if err != nil {
+		return "", err
+	}
+	wrapped, err := socks5.BuildUDP("216.239.32.10", 53, q)
+	if err != nil {
+		return "", err
+	}
+	var ip string
+	err = udpRoundTrip(uc, wrapped, func(payload []byte) error {
+		var resp dnsmessage.Message
+		if err := resp.Unpack(payload); err != nil {
+			return err
+		}
+		for _, a := range resp.Answers {
+			txt, ok := a.Body.(*dnsmessage.TXTResource)
+			if !ok {
+				continue
+			}
+			for _, s := range txt.TXT {
+				if strings.Contains(s, ".") && !strings.Contains(s, " ") {
+					ip = strings.TrimSpace(s)
+					return nil
+				}
+			}
+		}
+		return fmt.Errorf("no TXT in response")
+	})
+	if err != nil {
+		return "", err
+	}
+	return ip, nil
+}
+
+func dhtPing(uc net.Conn, host string) error {
+	payload := []byte("d1:ad2:id20:01234567890123456789e1:q4:ping1:t2:aa1:y1:qe")
+	wrapped, err := socks5.BuildUDP(host, 6881, payload)
+	if err != nil {
+		return err
+	}
+	return udpRoundTrip(uc, wrapped, func(reply []byte) error {
+		if len(reply) == 0 || reply[0] != 'd' {
+			return fmt.Errorf("unexpected dht reply %q", reply)
+		}
+		return nil
+	})
+}
+
+func udpRoundTrip(uc net.Conn, wrapped []byte, check func([]byte) error) error {
+	uc.SetDeadline(time.Now().Add(15 * time.Second))
 	if _, err := uc.Write(wrapped); err != nil {
 		return err
 	}
@@ -170,37 +281,5 @@ func dnsCheck(relayHost, relayPort, dnsServer string) error {
 	if err != nil {
 		return err
 	}
-	var resp dnsmessage.Message
-	return resp.Unpack(payload)
-}
-
-func dhtPing(relayHost, relayPort, host string) error {
-	// Minimal bencode ping to router.bittorrent.com:6881
-	payload := []byte("d1:ad2:id20:01234567890123456789e1:q4:ping1:t2:aa1:y1:qe")
-	wrapped, err := socks5.BuildUDP(host, 6881, payload)
-	if err != nil {
-		return err
-	}
-	uc, err := net.Dial("udp", net.JoinHostPort(relayHost, relayPort))
-	if err != nil {
-		return err
-	}
-	defer uc.Close()
-	uc.SetDeadline(time.Now().Add(10 * time.Second))
-	if _, err := uc.Write(wrapped); err != nil {
-		return err
-	}
-	buf := make([]byte, 1500)
-	n, err := uc.Read(buf)
-	if err != nil {
-		return err
-	}
-	_, reply, err := socks5.ParseUDP(buf[:n])
-	if err != nil {
-		return err
-	}
-	if len(reply) == 0 || reply[0] != 'd' {
-		return fmt.Errorf("unexpected dht reply %q", reply)
-	}
-	return nil
+	return check(payload)
 }

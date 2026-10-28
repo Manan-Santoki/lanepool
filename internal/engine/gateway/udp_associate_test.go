@@ -77,6 +77,64 @@ func TestSOCKS5UDPAssociateDNS(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 }
 
+func TestSOCKS5UDPAssociateDNSDomainATYP(t *testing.T) {
+	e := newEnv(t, "nl")
+	hash, _ := auth.HashPassword("password123")
+	e.addUser(protocol.UserSpec{
+		Username: "udpuser", Enabled: true, PasswordHash: hash,
+		UDPEnabled: true, LogMode: protocol.LogModeOff,
+	}, "password123")
+	e.srv.UDP = UDPConfig{AdvertiseHost: "127.0.0.1", PortMin: 39000, PortMax: 39010}
+
+	relayHost, relayPort, ctrl, err := socks5Associate(e.srv.Addr(), "udpuser", "password123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctrl.Close()
+
+	var msg dnsmessage.Message
+	msg.Header.ID = 0x5678
+	msg.Header.RecursionDesired = true
+	msg.Questions = []dnsmessage.Question{{
+		Name:  dnsmessage.MustNewName("any."),
+		Type:  dnsmessage.TypeA,
+		Class: dnsmessage.ClassINET,
+	}}
+	q, err := msg.Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapped, err := socks5.BuildUDP(wgtest.ResolverHost, 53, q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uc, err := net.Dial("udp", net.JoinHostPort(relayHost, relayPort))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer uc.Close()
+	if _, err := uc.Write(wrapped); err != nil {
+		t.Fatal(err)
+	}
+	uc.SetReadDeadline(time.Now().Add(10 * time.Second))
+	buf := make([]byte, 512)
+	n, err := uc.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, payload, err := socks5.ParseUDP(buf[:n])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var resp dnsmessage.Message
+	if err := resp.Unpack(payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Answers) == 0 {
+		t.Fatal("expected DNS answer via domain ATYP")
+	}
+}
+
 func socks5Associate(proxyAddr, user, pass string) (relayHost string, relayPort string, ctrl net.Conn, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

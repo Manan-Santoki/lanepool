@@ -114,11 +114,25 @@ func (s *Server) buildEngineConfig(ctx context.Context) (protocol.EngineConfig, 
 	if err != nil {
 		return cfg, err
 	}
-	// The version is a hash of the content, so engines only reload on real changes.
-	raw, _ := json.Marshal(cfg)
+	// The version is a hash of structural content (usage counters excluded), so
+	// engines only reload tunnels and policy when settings really change.
+	raw, _ := json.Marshal(engineConfigForHash(cfg))
 	sum := sha256.Sum256(raw)
 	cfg.Version = hex.EncodeToString(sum[:8])
 	return cfg, nil
+}
+
+// engineConfigForHash returns cfg with volatile usage fields zeroed for hashing.
+func engineConfigForHash(cfg protocol.EngineConfig) protocol.EngineConfig {
+	out := cfg
+	out.Version = ""
+	out.Users = nil
+	for _, u := range cfg.Users {
+		u2 := u
+		u2.UsedBytes = 0
+		out.Users = append(out.Users, u2)
+	}
+	return out
 }
 
 func (s *Server) handleEngineConfig(w http.ResponseWriter, r *http.Request) {

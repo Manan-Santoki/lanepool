@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync"
@@ -359,6 +360,11 @@ func (c *Client) RestartAll() {
 // ListenPacket is not supported when lanes run in a separate process.
 func (c *Client) ListenPacket(context.Context, string) (net.PacketConn, func(), error) {
 	return nil, nil, errors.New("socks5 udp associate requires in-process lanes (unset LANES_URL)")
+}
+
+// LookupHost is not supported when lanes run in a separate process.
+func (c *Client) LookupHost(context.Context, string, string) (netip.Addr, error) {
+	return netip.Addr{}, errors.New("socks5 udp associate requires in-process lanes (unset LANES_URL)")
 }
 
 // Dial connects to address through lane id, via the lanes process.

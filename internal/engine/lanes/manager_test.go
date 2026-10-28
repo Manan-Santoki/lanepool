@@ -328,6 +328,9 @@ func (t *poolTunnel) DialContext(context.Context, string, string) (net.Conn, err
 func (t *poolTunnel) ListenPacket(context.Context, string, string) (net.PacketConn, error) {
 	return nil, fmt.Errorf("test destination unavailable")
 }
+func (t *poolTunnel) LookupContextHost(context.Context, string) ([]string, error) {
+	return nil, fmt.Errorf("test destination unavailable")
+}
 
 type poolHarness struct {
 	m      *Manager

@@ -41,6 +41,7 @@ import (
 type Tunnel interface {
 	DialContext(ctx context.Context, network, address string) (net.Conn, error)
 	ListenPacket(ctx context.Context, network, address string) (net.PacketConn, error)
+	LookupContextHost(ctx context.Context, host string) ([]string, error)
 	Stats() wg.Stats
 	Close()
 }
@@ -749,6 +750,38 @@ func (m *Manager) ListenPacket(ctx context.Context, id string) (net.PacketConn, 
 		})
 	}
 	return pc, release, nil
+}
+
+// LookupHost resolves host to an IPv4 address through lane id's tunnel DNS.
+func (m *Manager) LookupHost(ctx context.Context, id, host string) (netip.Addr, error) {
+	if ip, err := netip.ParseAddr(host); err == nil {
+		return ip, nil
+	}
+	m.mu.Lock()
+	l, ok := m.lanes[id]
+	var tun Tunnel
+	if ok && l.status == protocol.LaneUp {
+		tun = l.tun
+	}
+	m.mu.Unlock()
+	if tun == nil {
+		return netip.Addr{}, ErrNoLane
+	}
+	addrs, err := tun.LookupContextHost(ctx, host)
+	if err != nil {
+		return netip.Addr{}, err
+	}
+	for _, a := range addrs {
+		if ip, err := netip.ParseAddr(a); err == nil && ip.Is4() {
+			return ip.Unmap(), nil
+		}
+	}
+	for _, a := range addrs {
+		if ip, err := netip.ParseAddr(a); err == nil {
+			return ip.Unmap(), nil
+		}
+	}
+	return netip.Addr{}, fmt.Errorf("no address for %s", host)
 }
 
 // ExitIP returns the last known exit IP of a lane.
