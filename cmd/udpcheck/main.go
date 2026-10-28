@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -68,23 +69,28 @@ func main() {
 	}
 	fmt.Println("dns domain ATYP (dns.google): ok")
 
+	failed := false
 	udpIP, err := udpExitIP(uc)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "udp exit ip: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Println("udp exit IP:", udpIP)
-	if strings.TrimSpace(udpIP) == strings.TrimSpace(exitIP) {
-		fmt.Println("tcp/udp exit IP: match")
+		fmt.Fprintf(os.Stderr, "udp exit ip: %v (warning)\n", err)
+		failed = true
 	} else {
-		fmt.Println("tcp/udp exit IP: MISMATCH")
-		os.Exit(1)
+		fmt.Println("udp exit IP:", udpIP)
+		if strings.TrimSpace(udpIP) == strings.TrimSpace(exitIP) {
+			fmt.Println("tcp/udp exit IP: match")
+		} else {
+			fmt.Println("tcp/udp exit IP: MISMATCH")
+			failed = true
+		}
 	}
 
 	if err := dhtPing(uc, *dhtHost); err != nil {
 		fmt.Fprintf(os.Stderr, "dht ping: %v (non-fatal)\n", err)
 	} else {
 		fmt.Println("dht ping: ok")
+	}
+	if failed {
+		os.Exit(1)
 	}
 }
 
@@ -166,15 +172,8 @@ func associate(proxyAddr, user, pass string) (string, string, net.Conn, error) {
 }
 
 func dnsCheck(uc net.Conn, dnsServer string) error {
-	var msg dnsmessage.Message
-	msg.Header.ID = 0xbeef
-	msg.Header.RecursionDesired = true
-	msg.Questions = []dnsmessage.Question{{
-		Name:  dnsmessage.MustNewName("example.com."),
-		Type:  dnsmessage.TypeA,
-		Class: dnsmessage.ClassINET,
-	}}
-	q, err := msg.Pack()
+	const id = 0xbeef
+	q, err := exampleAQuery(id, "example.com.")
 	if err != nil {
 		return err
 	}
@@ -183,21 +182,17 @@ func dnsCheck(uc net.Conn, dnsServer string) error {
 		return err
 	}
 	return udpRoundTrip(uc, wrapped, func(payload []byte) error {
+		if err := validateDNSReplyID(payload, id); err != nil {
+			return err
+		}
 		var resp dnsmessage.Message
 		return resp.Unpack(payload)
 	})
 }
 
 func dnsDomainCheck(uc net.Conn) error {
-	var msg dnsmessage.Message
-	msg.Header.ID = 0xcafe
-	msg.Header.RecursionDesired = true
-	msg.Questions = []dnsmessage.Question{{
-		Name:  dnsmessage.MustNewName("example.com."),
-		Type:  dnsmessage.TypeA,
-		Class: dnsmessage.ClassINET,
-	}}
-	q, err := msg.Pack()
+	const id = 0xcafe
+	q, err := exampleAQuery(id, "example.com.")
 	if err != nil {
 		return err
 	}
@@ -206,20 +201,16 @@ func dnsDomainCheck(uc net.Conn) error {
 		return err
 	}
 	return udpRoundTrip(uc, wrapped, func(payload []byte) error {
+		if err := validateDNSReplyID(payload, id); err != nil {
+			return err
+		}
 		var resp dnsmessage.Message
 		return resp.Unpack(payload)
 	})
 }
 
 func udpExitIP(uc net.Conn) (string, error) {
-	var msg dnsmessage.Message
-	msg.Header.ID = 0xface
-	msg.Questions = []dnsmessage.Question{{
-		Name:  dnsmessage.MustNewName("o-o.myaddr.l.google.com."),
-		Type:  dnsmessage.TypeTXT,
-		Class: dnsmessage.ClassINET,
-	}}
-	q, err := msg.Pack()
+	q, id, err := googleMyAddrTXTQuery()
 	if err != nil {
 		return "", err
 	}
@@ -229,23 +220,12 @@ func udpExitIP(uc net.Conn) (string, error) {
 	}
 	var ip string
 	err = udpRoundTrip(uc, wrapped, func(payload []byte) error {
-		var resp dnsmessage.Message
-		if err := resp.Unpack(payload); err != nil {
+		got, err := extractMyAddrIPFromDNS(payload, id)
+		if err != nil {
 			return err
 		}
-		for _, a := range resp.Answers {
-			txt, ok := a.Body.(*dnsmessage.TXTResource)
-			if !ok {
-				continue
-			}
-			for _, s := range txt.TXT {
-				if strings.Contains(s, ".") && !strings.Contains(s, " ") {
-					ip = strings.TrimSpace(s)
-					return nil
-				}
-			}
-		}
-		return fmt.Errorf("no TXT in response")
+		ip = got
+		return nil
 	})
 	if err != nil {
 		return "", err
@@ -268,18 +248,29 @@ func dhtPing(uc net.Conn, host string) error {
 }
 
 func udpRoundTrip(uc net.Conn, wrapped []byte, check func([]byte) error) error {
-	uc.SetDeadline(time.Now().Add(15 * time.Second))
+	deadline := time.Now().Add(15 * time.Second)
 	if _, err := uc.Write(wrapped); err != nil {
 		return err
 	}
 	buf := make([]byte, 1500)
-	n, err := uc.Read(buf)
-	if err != nil {
-		return err
+	for {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timeout waiting for udp reply")
+		}
+		uc.SetDeadline(time.Now().Add(time.Until(deadline)))
+		n, err := uc.Read(buf)
+		if err != nil {
+			return err
+		}
+		_, payload, err := socks5.ParseUDP(buf[:n])
+		if err != nil {
+			continue
+		}
+		if err := check(payload); errors.Is(err, errSkipUDPReply) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		return nil
 	}
-	_, payload, err := socks5.ParseUDP(buf[:n])
-	if err != nil {
-		return err
-	}
-	return check(payload)
 }
