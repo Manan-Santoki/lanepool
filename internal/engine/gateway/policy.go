@@ -204,6 +204,31 @@ func (p *Policy) Apply(settings protocol.EngineSettings, users []protocol.UserSp
 	p.settings = settings
 }
 
+// UpdateUsedBytes refreshes quota counters from control without resetting sessions.
+func (p *Policy) UpdateUsedBytes(users []protocol.UserSpec) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, spec := range users {
+		if u := p.users[strings.ToLower(spec.Username)]; u != nil {
+			u.spec.UsedBytes = spec.UsedBytes
+		}
+	}
+}
+
+// CommitUsage adds bytes from a successful report to local quota counters.
+func (p *Policy) CommitUsage(deltas []protocol.UsageDelta) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, d := range deltas {
+		for _, u := range p.users {
+			if u.spec.ID == d.UserID {
+				u.spec.UsedBytes += d.BytesUp + d.BytesDown
+				break
+			}
+		}
+	}
+}
+
 func credKey(username, password string) [32]byte {
 	return sha256.Sum256([]byte(username + "\x00" + password))
 }

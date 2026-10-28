@@ -166,6 +166,11 @@ func (t *Tunnel) DialContext(ctx context.Context, network, address string) (net.
 	return t.net.DialContext(ctx, network, address)
 }
 
+// LookupContextHost resolves host through the tunnel's DNS (no host resolver leak).
+func (t *Tunnel) LookupContextHost(ctx context.Context, host string) ([]string, error) {
+	return t.net.LookupContextHost(ctx, host)
+}
+
 // Listen opens a TCP listener on the tunnel address (used by test servers).
 func (t *Tunnel) Listen(port int) (net.Listener, error) {
 	return t.net.ListenTCP(&net.TCPAddr{Port: port})

@@ -202,6 +202,8 @@ func (s *Server) handleSOCKSAssociate(c net.Conn, req *request, username, passwo
 
 	uid, lane := req.rec.UserID, req.rec.LaneID
 	clientIP := req.client
+	hostCache := newUDPHostCache()
+	relayLog := s.Log
 
 	copyToLane := func() {
 		buf := make([]byte, 64*1024)
@@ -228,14 +230,18 @@ func (s *Server) handleSOCKSAssociate(c net.Conn, req *request, username, passwo
 
 			h, payload, err := socks5.ParseUDP(buf[:n])
 			if err != nil {
+				s.logUDPDrop(relayLog, "parse", err)
 				continue
 			}
 			lastActive.Store(time.Now().UnixNano())
-			dst := &net.UDPAddr{IP: net.ParseIP(h.Host), Port: int(h.Port)}
-			if dst.IP == nil {
+			dstIP, err := resolveUDPAddr(assocCtx, s.Lanes, lane, h.Host, hostCache)
+			if err != nil {
+				s.logUDPDrop(relayLog, "resolve", err)
 				continue
 			}
+			dst := &net.UDPAddr{IP: dstIP.AsSlice(), Port: int(h.Port)}
 			if _, err := lanePC.WriteTo(payload, dst); err != nil {
+				s.logUDPDrop(relayLog, "write", err)
 				continue
 			}
 			lc.up.Add(int64(len(payload)))

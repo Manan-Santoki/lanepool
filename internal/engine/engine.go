@@ -207,16 +207,18 @@ func (e *Engine) fetchConfig(ctx context.Context) error {
 
 // Apply loads a configuration (exported for tests and single-binary setups).
 func (e *Engine) Apply(cfg protocol.EngineConfig) {
-	e.lanes.Apply(cfg.Settings, cfg.Lanes)
-	e.policy.Apply(cfg.Settings, cfg.Users, cfg.Burned)
-	e.gw.SetSettings(cfg.Settings)
 	e.mu.Lock()
 	changed := e.version != cfg.Version
 	e.version = cfg.Version
 	e.mu.Unlock()
 	if changed {
+		e.lanes.Apply(cfg.Settings, cfg.Lanes)
+		e.policy.Apply(cfg.Settings, cfg.Users, cfg.Burned)
+		e.gw.SetSettings(cfg.Settings)
 		e.log.Info("config applied", "version", cfg.Version, "lanes", len(cfg.Lanes), "users", len(cfg.Users))
+		return
 	}
+	e.policy.UpdateUsedBytes(cfg.Users)
 }
 
 // --- reports ----------------------------------------------------------------
@@ -317,6 +319,7 @@ func (e *Engine) sendReport(ctx context.Context) error {
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("control returned HTTP %d", resp.StatusCode)
 	}
+	e.policy.CommitUsage(r.Usage)
 	// Accepted: forget what was sent. Anything drained meanwhile stays pending.
 	e.mu.Lock()
 	p := &e.pending
