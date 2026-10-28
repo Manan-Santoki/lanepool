@@ -293,7 +293,7 @@ func (s *Server) admit(req *request, username, password string) (laneID string, 
 // restrictions, username parameters and burned IPs.
 func (s *Server) selectLane(req *request) string {
 	u, p := req.user, req.params
-	var cands []lanes.Info
+	var stickyCands, cands []lanes.Info
 	for _, l := range s.Lanes.Usable() {
 		if len(u.lanes) > 0 && !u.lanes[strings.ToLower(l.ID)] {
 			continue
@@ -307,18 +307,25 @@ func (s *Server) selectLane(req *request) string {
 		if p.Lane != "" && !strings.EqualFold(l.ID, p.Lane) && !strings.HasSuffix(strings.ToLower(l.ID), ":"+strings.ToLower(p.Lane)) {
 			continue
 		}
+		stickyCands = append(stickyCands, l)
 		if s.Policy.Burned(l.ID, req.host) {
 			continue
 		}
 		cands = append(cands, l)
 	}
-	if len(cands) == 0 {
-		return ""
-	}
-
 	choose := func(c []lanes.Info) string { return pick(c, s.cfg().Strategy, &s.rr) }
 	if owner, key, ttl := stickyKey(u, p, req.client); key != "" {
-		return s.Policy.stickyPick(owner, key, ttl, cands, choose)
+		if len(stickyCands) == 0 {
+			return ""
+		}
+		// Sticky sessions pin TCP and UDP to the same lane. Per-host burned IPs
+		// only affect non-sticky rotation; they must not move a sticky session
+		// on one connection type while a long-lived UDP ASSOCIATE stays on the
+		// old exit.
+		return s.Policy.stickyPick(owner, key, ttl, stickyCands, choose)
+	}
+	if len(cands) == 0 {
+		return ""
 	}
 	return choose(cands)
 }

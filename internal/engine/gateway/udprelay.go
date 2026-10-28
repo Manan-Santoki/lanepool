@@ -149,17 +149,17 @@ func (s *Server) handleSOCKSAssociate(c net.Conn, req *request, username, passwo
 	req.rec.ExitIP = s.laneExit(laneID)
 
 	ctx := context.Background()
-	lanePC, releaseLane, err := s.Lanes.ListenPacket(ctx, laneID)
-	if err != nil {
+	var bind udpLaneBind
+	if err := bind.open(ctx, s.Lanes, laneID); err != nil {
 		releaseAdmit()
 		socksReply(c, socksHostUnreach)
 		s.finish(req, protocol.ResultDialFailed, err)
 		return
 	}
+	defer bind.close()
 
 	relayConn, relayPort, err := s.ensurePortPool().acquire()
 	if err != nil {
-		releaseLane()
 		releaseAdmit()
 		socksReply(c, socksFailure)
 		s.finish(req, protocol.ResultDialFailed, err)
@@ -168,7 +168,6 @@ func (s *Server) handleSOCKSAssociate(c net.Conn, req *request, username, passwo
 
 	if err := socksAssociateReply(c, s.advertiseHost(), relayPort); err != nil {
 		s.ensurePortPool().release(relayConn)
-		releaseLane()
 		releaseAdmit()
 		return
 	}
@@ -200,7 +199,7 @@ func (s *Server) handleSOCKSAssociate(c net.Conn, req *request, username, passwo
 	var lastActive atomic.Int64
 	lastActive.Store(time.Now().UnixNano())
 
-	uid, lane := req.rec.UserID, req.rec.LaneID
+	uid := req.rec.UserID
 	clientIP := req.client
 	hostCache := newUDPHostCache()
 	relayLog := s.Log
@@ -234,26 +233,42 @@ func (s *Server) handleSOCKSAssociate(c net.Conn, req *request, username, passwo
 				continue
 			}
 			lastActive.Store(time.Now().UnixNano())
-			dstIP, err := resolveUDPAddr(assocCtx, s.Lanes, lane, h.Host, hostCache)
+			laneID, lanePC := bind.get()
+			if lanePC == nil {
+				cancel()
+				return
+			}
+			dstIP, err := resolveUDPAddr(assocCtx, s.Lanes, laneID, h.Host, hostCache)
 			if err != nil {
 				s.logUDPDrop(relayLog, "resolve", err)
 				continue
 			}
 			dst := &net.UDPAddr{IP: dstIP.AsSlice(), Port: int(h.Port)}
 			if _, err := lanePC.WriteTo(payload, dst); err != nil {
+				if _, pc2 := bind.get(); pc2 != nil && pc2 != lanePC {
+					continue
+				}
 				s.logUDPDrop(relayLog, "write", err)
 				continue
 			}
 			lc.up.Add(int64(len(payload)))
-			s.Policy.AddUsage(uid, lane, int64(len(payload)), 0)
+			s.Policy.AddUsage(uid, laneID, int64(len(payload)), 0)
 		}
 	}
 
 	copyFromLane := func() {
 		buf := make([]byte, 64*1024)
 		for {
+			laneID, lanePC := bind.get()
+			if lanePC == nil {
+				cancel()
+				return
+			}
 			n, addr, err := lanePC.ReadFrom(buf)
 			if err != nil {
+				if _, pc2 := bind.get(); pc2 != nil && pc2 != lanePC {
+					continue
+				}
 				cancel()
 				return
 			}
@@ -280,7 +295,7 @@ func (s *Server) handleSOCKSAssociate(c net.Conn, req *request, username, passwo
 				return
 			}
 			lc.down.Add(int64(len(wrapped)))
-			s.Policy.AddUsage(uid, lane, 0, int64(len(wrapped)))
+			s.Policy.AddUsage(uid, laneID, 0, int64(len(wrapped)))
 		}
 	}
 
@@ -310,13 +325,22 @@ func (s *Server) handleSOCKSAssociate(c net.Conn, req *request, username, passwo
 			if time.Since(time.Unix(0, lastActive.Load())) > idle {
 				goto cleanup
 			}
+			if want := s.selectLane(req); want != "" {
+				if bind.swap(assocCtx, s.Lanes, want) {
+					exit := s.laneExit(want)
+					req.rec.LaneID, req.rec.ExitIP = want, exit
+					s.mu.Lock()
+					lc.info.LaneID, lc.info.ExitIP = want, exit
+					s.mu.Unlock()
+					hostCache = newUDPHostCache()
+				}
+			}
 		}
 	}
 
 cleanup:
 	cancel()
 	s.ensurePortPool().release(relayConn)
-	releaseLane()
 	releaseAdmit()
 	c.Close()
 	req.rec.BytesUp, req.rec.BytesDown = lc.up.Load(), lc.down.Load()
@@ -325,7 +349,75 @@ cleanup:
 	if s.shouldLogConn(u) {
 		s.record(req.rec)
 	}
-	s.Policy.CountConnection(uid, lane, result != protocol.ResultOK)
+	s.Policy.CountConnection(uid, bind.laneID(), result != protocol.ResultOK)
+}
+
+// udpLaneBind is the lane packet socket for one SOCKS5 UDP association. It can
+// be swapped when the sticky session failovers to another lane.
+type udpLaneBind struct {
+	mu      sync.Mutex
+	lane    string
+	pc      net.PacketConn
+	release func()
+}
+
+func (b *udpLaneBind) open(ctx context.Context, lanes Lanes, id string) error {
+	pc, release, err := lanes.ListenPacket(ctx, id)
+	if err != nil {
+		return err
+	}
+	b.mu.Lock()
+	b.lane, b.pc, b.release = id, pc, release
+	b.mu.Unlock()
+	return nil
+}
+
+func (b *udpLaneBind) close() {
+	b.mu.Lock()
+	release := b.release
+	b.lane, b.pc, b.release = "", nil, nil
+	b.mu.Unlock()
+	if release != nil {
+		release()
+	}
+}
+
+func (b *udpLaneBind) laneID() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.lane
+}
+
+func (b *udpLaneBind) get() (string, net.PacketConn) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.lane, b.pc
+}
+
+func (b *udpLaneBind) swap(ctx context.Context, lanes Lanes, id string) bool {
+	if id == "" {
+		return false
+	}
+	b.mu.Lock()
+	if id == b.lane {
+		b.mu.Unlock()
+		return false
+	}
+	b.mu.Unlock()
+
+	pc, release, err := lanes.ListenPacket(ctx, id)
+	if err != nil {
+		return false
+	}
+
+	b.mu.Lock()
+	oldRelease := b.release
+	b.lane, b.pc, b.release = id, pc, release
+	b.mu.Unlock()
+	if oldRelease != nil {
+		oldRelease()
+	}
+	return true
 }
 
 func socksAssociateReply(c net.Conn, host string, port int) error {
