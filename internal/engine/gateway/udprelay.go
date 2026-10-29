@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -79,10 +80,29 @@ func (s *Server) advertiseHost() string {
 	if s.UDP.AdvertiseIP.IsValid() {
 		return s.UDP.AdvertiseIP.String()
 	}
-	if h := s.UDP.AdvertiseHost; h != "" {
+	if h := s.UDP.AdvertiseHost; h != "" && !strings.EqualFold(h, "auto") {
 		return h
 	}
 	return "127.0.0.1"
+}
+
+// advertiseHostForClient is the BND.ADDR host in SOCKS5 UDP ASSOCIATE replies.
+// When AdvertiseHost is "auto" (or empty with no AdvertiseIP), use the local
+// address of the TCP control connection so each client network gets a reachable IP.
+func (s *Server) advertiseHostForClient(c net.Conn) string {
+	if s.UDP.AdvertiseIP.IsValid() {
+		return s.UDP.AdvertiseIP.String()
+	}
+	h := s.UDP.AdvertiseHost
+	if h != "" && !strings.EqualFold(h, "auto") {
+		return h
+	}
+	if la := c.LocalAddr(); la != nil {
+		if ta, ok := la.(*net.TCPAddr); ok && ta.IP != nil && !ta.IP.IsUnspecified() {
+			return ta.IP.String()
+		}
+	}
+	return s.advertiseHost()
 }
 
 func (s *Server) userIdleTimeout(u *user) time.Duration {
@@ -166,7 +186,7 @@ func (s *Server) handleSOCKSAssociate(c net.Conn, req *request, username, passwo
 		return
 	}
 
-	if err := socksAssociateReply(c, s.advertiseHost(), relayPort); err != nil {
+	if err := socksAssociateReply(c, s.advertiseHostForClient(c), relayPort); err != nil {
 		s.ensurePortPool().release(relayConn)
 		releaseAdmit()
 		return
@@ -235,6 +255,7 @@ func (s *Server) handleSOCKSAssociate(c net.Conn, req *request, username, passwo
 			lastActive.Store(time.Now().UnixNano())
 			laneID, lanePC := bind.get()
 			if lanePC == nil {
+				s.logUDPDrop(relayLog, "no_lane_bind", errors.New("lane socket closed"))
 				cancel()
 				return
 			}
@@ -325,7 +346,7 @@ func (s *Server) handleSOCKSAssociate(c net.Conn, req *request, username, passwo
 			if time.Since(time.Unix(0, lastActive.Load())) > idle {
 				goto cleanup
 			}
-			if want := s.selectLane(req); want != "" {
+			if want := s.udpFailoverLane(req, bind.laneID()); want != "" && want != bind.laneID() {
 				if bind.swap(assocCtx, s.Lanes, want) {
 					exit := s.laneExit(want)
 					req.rec.LaneID, req.rec.ExitIP = want, exit
@@ -333,6 +354,10 @@ func (s *Server) handleSOCKSAssociate(c net.Conn, req *request, username, passwo
 					lc.info.LaneID, lc.info.ExitIP = want, exit
 					s.mu.Unlock()
 					hostCache = newUDPHostCache()
+					if relayLog != nil {
+						relayLog.Info("socks5 udp association lane failover",
+							"user", req.rec.Username, "conn", req.rec.ID, "lane", want, "exit", exit)
+					}
 				}
 			}
 		}
@@ -346,6 +371,11 @@ cleanup:
 	req.rec.BytesUp, req.rec.BytesDown = lc.up.Load(), lc.down.Load()
 	req.rec.EndedAt = time.Now()
 	req.rec.Result = result
+	if relayLog != nil && (result != protocol.ResultOK || lc.up.Load()+lc.down.Load() > 0) {
+		relayLog.Info("socks5 udp association closed",
+			"user", req.rec.Username, "conn", req.rec.ID, "lane", bind.laneID(),
+			"result", result, "bytes_up", lc.up.Load(), "bytes_down", lc.down.Load())
+	}
 	if s.shouldLogConn(u) {
 		s.record(req.rec)
 	}

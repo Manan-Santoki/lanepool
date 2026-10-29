@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/netip"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,13 +16,23 @@ import (
 // hideLaneLanes drops one lane from Usable() to simulate it going down.
 type hideLaneLanes struct {
 	inner Lanes
+	mu    sync.RWMutex
 	hide  string
 }
 
+func (h *hideLaneLanes) setHide(id string) {
+	h.mu.Lock()
+	h.hide = id
+	h.mu.Unlock()
+}
+
 func (h *hideLaneLanes) Usable() []lanes.Info {
+	h.mu.RLock()
+	hide := h.hide
+	h.mu.RUnlock()
 	var out []lanes.Info
 	for _, l := range h.inner.Usable() {
-		if l.ID != h.hide {
+		if l.ID != hide {
 			out = append(out, l)
 		}
 	}
@@ -104,6 +115,9 @@ func TestStickyUDPFollowsLaneFailover(t *testing.T) {
 		t.Fatal("missing lane for first TCP")
 	}
 
+	hide := &hideLaneLanes{inner: e.lanes}
+	e.srv.Lanes = hide
+
 	_, _, ctrl, err := socks5Associate(e.srv.Addr(), user, "password123")
 	if err != nil {
 		t.Fatal(err)
@@ -113,8 +127,7 @@ func TestStickyUDPFollowsLaneFailover(t *testing.T) {
 		t.Fatalf("UDP lane %s, want %s", lane, firstLane)
 	}
 
-	hide := &hideLaneLanes{inner: e.lanes, hide: firstLane}
-	e.srv.Lanes = hide
+	hide.setHide(firstLane)
 
 	deadline := time.Now().Add(5 * time.Second)
 	var udpLane, tcpLane string
@@ -140,6 +153,105 @@ func TestStickyUDPFollowsLaneFailover(t *testing.T) {
 		t.Fatalf("still on failed lane %s", firstLane)
 	}
 	ctrl.Close()
+}
+
+// Non-sticky users (plain username, no session) must keep one lane for the
+// lifetime of a UDP ASSOCIATE; periodic re-select must not rotate round-robin.
+func TestNonStickyUDPLaneStable(t *testing.T) {
+	e := newEnv(t, "us", "us")
+	hash, _ := auth.HashPassword("password123")
+	e.addUser(protocol.UserSpec{
+		Username: "qbit", Enabled: true, PasswordHash: hash,
+		UDPEnabled: true, LogMode: protocol.LogModeOff,
+	}, "password123")
+	e.apply()
+	e.srv.UDP = UDPConfig{AdvertiseHost: "127.0.0.1", PortMin: 39300, PortMax: 39310}
+
+	const user = "qbit"
+	_, _, ctrl, err := socks5Associate(e.srv.Addr(), user, "password123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctrl.Close()
+
+	first := laneForProtocol(e, "socks5-udp")
+	if first == "" {
+		t.Fatal("no UDP association")
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if lane := laneForProtocol(e, "socks5-udp"); lane != first {
+			t.Fatalf("non-sticky UDP lane changed %s -> %s", first, lane)
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+}
+
+func TestNonStickyUDPFailoverWhenLaneDown(t *testing.T) {
+	e := newEnv(t, "us", "us")
+	hash, _ := auth.HashPassword("password123")
+	e.addUser(protocol.UserSpec{
+		Username: "qbit", Enabled: true, PasswordHash: hash,
+		UDPEnabled: true, LogMode: protocol.LogModeOff,
+	}, "password123")
+	e.apply()
+	e.srv.UDP = UDPConfig{AdvertiseHost: "127.0.0.1", PortMin: 39400, PortMax: 39410}
+
+	const user = "qbit"
+	hide := &hideLaneLanes{inner: e.lanes}
+	e.srv.Lanes = hide
+
+	_, _, ctrl, err := socks5Associate(e.srv.Addr(), user, "password123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctrl.Close()
+	var first string
+	waitAssoc := time.Now().Add(3 * time.Second)
+	for time.Now().Before(waitAssoc) {
+		first = laneForProtocol(e, "socks5-udp")
+		if first != "" {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if first == "" {
+		t.Fatal("no UDP association")
+	}
+
+	hide.setHide(first)
+
+	deadline := time.Now().Add(5 * time.Second)
+	var after string
+	for time.Now().Before(deadline) {
+		after = laneForProtocol(e, "socks5-udp")
+		if after != "" && after != first {
+			break
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	if after == "" || after == first {
+		t.Fatalf("expected failover from %s, still on %q", first, after)
+	}
+}
+
+func TestUDPAdvertiseHostAuto(t *testing.T) {
+	e := newEnv(t, "nl")
+	hash, _ := auth.HashPassword("password123")
+	e.addUser(protocol.UserSpec{
+		Username: "qbit", Enabled: true, PasswordHash: hash,
+		UDPEnabled: true, LogMode: protocol.LogModeOff,
+	}, "password123")
+	e.srv.UDP = UDPConfig{AdvertiseHost: "auto", PortMin: 39500, PortMax: 39510}
+
+	relayHost, _, ctrl, err := socks5Associate(e.srv.Addr(), "qbit", "password123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctrl.Close()
+	if relayHost != "127.0.0.1" {
+		t.Fatalf("auto advertise host %q, want 127.0.0.1", relayHost)
+	}
 }
 
 func laneForProtocol(e *env, proto string) string {

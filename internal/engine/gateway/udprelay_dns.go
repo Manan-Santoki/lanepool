@@ -76,11 +76,16 @@ func resolveUDPAddr(ctx context.Context, lanes Lanes, laneID string, host string
 
 func (s *Server) logUDPDrop(log *slog.Logger, reason string, err error) {
 	s.udpDrops.Add(1)
-	if log != nil {
-		if err != nil {
-			log.Debug("socks5 udp relay drop", "reason", reason, "err", err)
-		} else {
-			log.Debug("socks5 udp relay drop", "reason", reason)
-		}
+	if log == nil {
+		return
+	}
+	level := slog.LevelDebug
+	if reason == "no_lane_bind" {
+		level = slog.LevelWarn
+	}
+	if err != nil {
+		log.Log(context.Background(), level, "socks5 udp relay drop", "reason", reason, "err", err)
+	} else {
+		log.Log(context.Background(), level, "socks5 udp relay drop", "reason", reason)
 	}
 }
