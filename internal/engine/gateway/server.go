@@ -330,6 +330,50 @@ func (s *Server) selectLane(req *request) string {
 	return choose(cands)
 }
 
+// laneUsableForRequest reports whether laneID is still eligible for req
+// (same filters as selectLane, without picking a new lane).
+func (s *Server) laneUsableForRequest(req *request, laneID string) bool {
+	if laneID == "" {
+		return false
+	}
+	u, p := req.user, req.params
+	for _, l := range s.Lanes.Usable() {
+		if l.ID != laneID {
+			continue
+		}
+		if len(u.lanes) > 0 && !u.lanes[strings.ToLower(l.ID)] {
+			return false
+		}
+		if len(u.countries) > 0 && !u.countries[l.CountryCode] {
+			return false
+		}
+		if p.Country != "" && l.CountryCode != p.Country {
+			return false
+		}
+		if p.Lane != "" && !strings.EqualFold(l.ID, p.Lane) && !strings.HasSuffix(strings.ToLower(l.ID), ":"+strings.ToLower(p.Lane)) {
+			return false
+		}
+		if s.Policy.Burned(l.ID, req.host) {
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+// udpFailoverLane returns the lane a long-lived UDP ASSOCIATE should use.
+// Sticky sessions follow selectLane (including lane failure). Non-sticky users
+// keep the association lane until it leaves the usable set.
+func (s *Server) udpFailoverLane(req *request, current string) string {
+	if _, key, _ := stickyKey(req.user, req.params, req.client); key != "" {
+		return s.selectLane(req)
+	}
+	if s.laneUsableForRequest(req, current) {
+		return current
+	}
+	return s.selectLane(req)
+}
+
 func pick(cands []lanes.Info, strategy string, rr *atomic.Uint64) string {
 	switch strategy {
 	case protocol.StrategyRandom:

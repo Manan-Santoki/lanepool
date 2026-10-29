@@ -137,8 +137,8 @@ For two containers, use `lanepool control` and `lanepool engine`, as in
 | `LISTEN` / `PROXY_LISTEN` / `ENGINE_LISTEN` | | `:8000` / `:8080` / `:9090` |
 | `COOKIE_SECURE` | control | `false`; set `true` behind HTTPS |
 | `TRUSTED_PROXIES` | engine | CIDRs allowed to send PROXY protocol headers |
-| `UDP_ADVERTISE_HOST` | engine | Hostname returned in SOCKS5 UDP ASSOCIATE replies (default `lanepool` on Dokploy) |
-| `UDP_ADVERTISE_IP` | engine | Optional IP override for ASSOCIATE bind address in replies |
+| `UDP_ADVERTISE_HOST` | engine | Hostname in SOCKS5 UDP ASSOCIATE replies (default `lanepool` on Dokploy). Use a fixed IP on qbit-egress, or `auto` to use the TCP listener address the client connected to |
+| `UDP_ADVERTISE_IP` | engine | Optional IP override for ASSOCIATE bind address in replies (wins over `UDP_ADVERTISE_HOST`) |
 | `UDP_RELAY_PORT_MIN` / `UDP_RELAY_PORT_MAX` | engine | Host-side UDP relay port range (default `30000`–`30100`); expose on the internal Docker network only |
 | `LANES_URL` | engine | empty (lanes in the engine); `http://lanepool-lanes:9191` for a lanes process |
 | `LANES_TOKEN` | engine, lanes | `ENGINE_TOKEN` |
@@ -175,6 +175,10 @@ the VPN lanes:
    dashboard). Add a domain for service `control`, port `8000`.
 2. **Engine:** compose path `./deploy/dokploy-engine.yml`. Use the same
    `ENGINE_TOKEN` as the control service.
+   **qBittorrent on `qbit-egress`:** add compose overlay
+   `./deploy/dokploy-engine.qbit-egress.yml` (see that file). Point qBittorrent's
+   SOCKS5 proxy at `10.200.19.10:8080` (or your `QBIT_EGRESS_ENGINE_IP`) instead
+   of an nginx relay on `lanepool`.
 3. **Lanes (optional):** compose path `./deploy/dokploy-lanes.yml` with a
    `LANES_TOKEN`; then set `LANES_URL=http://lanepool-lanes:9191` and the same
    `LANES_TOKEN` on the engine. Engine deploys then keep every tunnel connected.

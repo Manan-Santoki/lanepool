@@ -21,6 +21,11 @@
 # lanepool:8080 (join the external lanepool-net network for that), control
 # reaches its API at lanepool:9090. Create lanepool-net once (Dokploy →
 # Networks, or docker network create lanepool-net) before deploying.
+#
+# qBittorrent on a separate qbit-egress network: add compose overlay
+# deploy/dokploy-engine.qbit-egress.yml (see that file for Dokploy steps and
+# the fixed proxy IP for qBittorrent). Base deploy is unchanged when the overlay
+# is not used.
 services:
   engine:
     build:

@@ -1,0 +1,38 @@
+# Optional overlay for lanepool-engine on Dokploy: attach the engine to the
+# external qBittorrent egress network with a stable IPv4 so qBittorrent can
+# reach TCP :8080 and UDP relay ports 30000–30100 directly (no nginx UDP relay).
+#
+# Prerequisites (once, on the Docker host):
+#   docker network create --subnet=10.200.19.0/24 qbit-egress
+#   (qBittorrent and any legacy lanepool-gw nginx should already use this network.)
+#
+# Enable in Dokploy (engine compose service "lanepool-engine"):
+#   1. Compose path: keep ./deploy/dokploy-engine.yml as the primary file.
+#   2. Add a second compose file: ./deploy/dokploy-engine.qbit-egress.yml
+#      (Dokploy → Compose → Additional compose files / override files).
+#   3. Environment (suggested):
+#        UDP_ADVERTISE_HOST=10.200.19.10
+#      or UDP_ADVERTISE_IP=10.200.19.10
+#      (must match QBIT_EGRESS_ENGINE_IP so ASSOCIATE replies use an address
+#       reachable from qBittorrent on qbit-egress.)
+#   4. Redeploy the engine only (same as without the overlay).
+#
+# qBittorrent (on qbit-egress): SOCKS5 proxy host 10.200.19.10 port 8080,
+# user qbit (plain username, no session/country params). You can retire
+# lanepool-gw nginx once this works.
+#
+# If qbit-egress does not exist, do not attach this file — base deploy is unchanged.
+services:
+  engine:
+    environment:
+      UDP_ADVERTISE_HOST: ${UDP_ADVERTISE_HOST:-10.200.19.10}
+      UDP_ADVERTISE_IP: ${UDP_ADVERTISE_IP:-}
+    networks:
+      qbit-egress:
+        ipv4_address: ${QBIT_EGRESS_ENGINE_IP:-10.200.19.10}
+        aliases:
+          - lanepool-engine
+
+networks:
+  qbit-egress:
+    external: true
