@@ -9,12 +9,12 @@
 # Enable in Dokploy (engine compose service "lanepool-engine"):
 #   1. Compose path: keep ./deploy/dokploy-engine.yml as the primary file.
 #   2. Add a second compose file: ./deploy/dokploy-engine.qbit-egress.yml
-#      (Dokploy → Compose → Additional compose files / override files).
-#   3. Environment (suggested):
-#        UDP_ADVERTISE_HOST=10.200.19.10
-#      or UDP_ADVERTISE_IP=10.200.19.10
-#      (must match QBIT_EGRESS_ENGINE_IP so ASSOCIATE replies use an address
-#       reachable from qBittorrent on qbit-egress.)
+#      (Dokploy → Compose → Additional compose files / override files), or use
+#      the Command field (see README) to pass both -f files.
+#   3. No UDP_ADVERTISE_* env change needed: this overlay sets
+#      UDP_ADVERTISE_HOST=auto so ASSOCIATE replies use the TCP listener IP
+#      each client connected to (qbit-egress vs dokploy-network). Override with
+#      UDP_ADVERTISE_HOST or UDP_ADVERTISE_IP only if you need a fixed address.
 #   4. Redeploy the engine only (same as without the overlay).
 #
 # qBittorrent (on qbit-egress): SOCKS5 proxy host 10.200.19.10 port 8080,
@@ -25,7 +25,7 @@
 services:
   engine:
     environment:
-      UDP_ADVERTISE_HOST: ${UDP_ADVERTISE_HOST:-10.200.19.10}
+      UDP_ADVERTISE_HOST: ${UDP_ADVERTISE_HOST:-auto}
       UDP_ADVERTISE_IP: ${UDP_ADVERTISE_IP:-}
     networks:
       qbit-egress:

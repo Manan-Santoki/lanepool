@@ -176,9 +176,18 @@ the VPN lanes:
 2. **Engine:** compose path `./deploy/dokploy-engine.yml`. Use the same
    `ENGINE_TOKEN` as the control service.
    **qBittorrent on `qbit-egress`:** add compose overlay
-   `./deploy/dokploy-engine.qbit-egress.yml` (see that file). Point qBittorrent's
-   SOCKS5 proxy at `10.200.19.10:8080` (or your `QBIT_EGRESS_ENGINE_IP`) instead
-   of an nginx relay on `lanepool`.
+   `./deploy/dokploy-engine.qbit-egress.yml` (see that file). No
+   `UDP_ADVERTISE_*` env change is required — the overlay defaults to
+   `UDP_ADVERTISE_HOST=auto` so SOCKS5 UDP ASSOCIATE replies use the engine IP
+   on whichever network the client connected (qbit-egress or dokploy-network).
+   Point qBittorrent's SOCKS5 proxy at `10.200.19.10:8080` (or your
+   `QBIT_EGRESS_ENGINE_IP`) instead of an nginx relay on `lanepool`.
+   If Dokploy's UI only accepts one compose file, set **Command** to (replace
+   `-p` with your compose project name if needed):
+
+   ```sh
+   compose --env-file deploy/.env -f ./deploy/dokploy-engine.yml -f ./deploy/dokploy-engine.qbit-egress.yml up -d --build --remove-orphans
+   ```
 3. **Lanes (optional):** compose path `./deploy/dokploy-lanes.yml` with a
    `LANES_TOKEN`; then set `LANES_URL=http://lanepool-lanes:9191` and the same
    `LANES_TOKEN` on the engine. Engine deploys then keep every tunnel connected.
