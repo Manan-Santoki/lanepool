@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log/slog"
 	"math/big"
@@ -322,7 +323,14 @@ func (s *Server) selectLane(req *request) string {
 		// only affect non-sticky rotation; they must not move a sticky session
 		// on one connection type while a long-lived UDP ASSOCIATE stays on the
 		// old exit.
-		return s.Policy.stickyPick(owner, key, ttl, stickyCands, choose)
+		//
+		// A new sticky session picks its lane by rendezvous hash rather than
+		// the rotation strategy, so after an engine restart (which forgets the
+		// in-memory sessions) the same session lands on the same lane again
+		// while that lane is up. Torrent clients and logged-in sessions then
+		// keep their exit IP across deploys.
+		stable := func(c []lanes.Info) string { return rendezvous(owner+"\x00"+key, c) }
+		return s.Policy.stickyPick(owner, key, ttl, stickyCands, stable)
 	}
 	if len(cands) == 0 {
 		return ""
@@ -372,6 +380,24 @@ func (s *Server) udpFailoverLane(req *request, current string) string {
 		return current
 	}
 	return s.selectLane(req)
+}
+
+// rendezvous returns the candidate with the highest hash of (key, lane ID):
+// the same key always maps to the same lane while it is a candidate, and
+// when a lane leaves only the sessions on it move.
+func rendezvous(key string, cands []lanes.Info) string {
+	var best string
+	var bestScore uint64
+	for _, c := range cands {
+		h := fnv.New64a()
+		h.Write([]byte(key))
+		h.Write([]byte{0})
+		h.Write([]byte(c.ID))
+		if score := h.Sum64(); best == "" || score > bestScore {
+			best, bestScore = c.ID, score
+		}
+	}
+	return best
 }
 
 func pick(cands []lanes.Info, strategy string, rr *atomic.Uint64) string {

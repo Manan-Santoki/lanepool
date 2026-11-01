@@ -3,8 +3,18 @@
 # reach TCP :8080 and UDP relay ports 30000–30100 directly (no nginx UDP relay).
 #
 # Prerequisites (once, on the Docker host):
-#   docker network create --subnet=10.200.19.0/24 qbit-egress
+#   docker network create --internal --subnet=10.200.19.0/24 qbit-egress
 #   (qBittorrent and any legacy lanepool-gw nginx should already use this network.)
+#
+#   --internal is the kill switch: the network has no route out, so if
+#   qBittorrent's proxy setting is ever cleared its traffic fails instead of
+#   leaving without the VPN. The engine still reaches the internet through its
+#   other networks. qBittorrent must not join any other network with internet
+#   access; put Sonarr/Radarr (and your reverse proxy, for the WebUI) on
+#   qbit-egress too so they can reach it. Check an existing network with
+#   docker network inspect -f '{{.Internal}}' qbit-egress
+#   An existing network can't be switched in place: disconnect its containers,
+#   remove it, recreate it with --internal and reconnect them.
 #
 # Enable in Dokploy (engine compose service "lanepool-engine"):
 #   1. Compose path: keep ./deploy/dokploy-engine.yml as the primary file.
@@ -20,6 +30,16 @@
 # qBittorrent (on qbit-egress): SOCKS5 proxy host 10.200.19.10 port 8080,
 # user qbit (plain username, no session/country params). You can retire
 # lanepool-gw nginx once this works.
+#
+# Proxy user settings for a torrent client (Users → qbit):
+#   - Sticky sessions: e.g. 1440 minutes. Stickiness is per client IP and is
+#     renewed on every connection, so an active client keeps one exit IP; it
+#     also survives engine restarts while that lane stays up. Peers and DHT
+#     nodes are lost whenever the exit IP changes.
+#   - Max connections / connections per second: 0 (unlimited).
+#   - SOCKS5 UDP: on (DHT, UDP trackers, uTP).
+#   - Idle timeout: e.g. 3600 s, so quiet UDP associations aren't closed.
+#   - Connection logging: off or sampled (torrents open thousands of connections).
 #
 # If qbit-egress does not exist, do not attach this file — base deploy is unchanged.
 services:

@@ -142,3 +142,38 @@ func TestProxySessionsGetDistinctExitIPs(t *testing.T) {
 		seen[ip] = s
 	}
 }
+
+// An engine restart forgets sticky sessions; the same session must still land
+// on the same lane afterwards, or torrent clients lose every peer on each deploy.
+func TestStickyChoiceSurvivesRestart(t *testing.T) {
+	cands := laneInfos("a", "b", "c", "d", "e", "f", "g", "h")
+	stable := func(key string) func([]lanes.Info) string {
+		return func(c []lanes.Info) string { return rendezvous("qbit\x00"+key, c) }
+	}
+	for _, key := range []string{"ip|10.200.19.20", "s|job42", "s|x"} {
+		first := NewPolicy().stickyPick("qbit", key, time.Hour, cands, stable(key))
+		again := NewPolicy().stickyPick("qbit", key, time.Hour, cands, stable(key)) // fresh engine
+		if first != again {
+			t.Fatalf("%s: lane %s before restart, %s after", key, first, again)
+		}
+		// Another lane leaving doesn't move it.
+		var other string
+		for _, c := range cands {
+			if c.ID != first {
+				other = c.ID
+				break
+			}
+		}
+		if got := NewPolicy().stickyPick("qbit", key, time.Hour, without(cands, other), stable(key)); got != first {
+			t.Fatalf("%s: moved from %s to %s when %s left", key, first, got, other)
+		}
+	}
+	// Different sessions still spread over lanes.
+	seen := map[string]bool{}
+	for i := 0; i < 40; i++ {
+		seen[rendezvous(fmt.Sprintf("qbit\x00s|%d", i), cands)] = true
+	}
+	if len(seen) < 5 {
+		t.Fatalf("40 sessions used only %d of 8 lanes", len(seen))
+	}
+}

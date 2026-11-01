@@ -56,6 +56,7 @@ your apps ─► lanepool proxy ──┼─► lane de-fra ─► 185.x.x.x    
   `alice-session-abc123` (same exit for 10 minutes), `alice-sessttl-30`, `alice-lane-<id>`.
   A user's live sessions get different lanes while there are enough of them, so
   N sessions mean N exit IPs; they share a lane only when every lane is held.
+  A session keeps its lane across engine restarts while that lane stays up.
 - **Burned-IP avoidance:** mark an exit IP as blocked by a domain, from the
   dashboard or from your app through the API, and lanepool stops using that lane
   for that domain. Repeated connection failures are detected automatically.
@@ -182,6 +183,11 @@ the VPN lanes:
    on whichever network the client connected (qbit-egress or dokploy-network).
    Point qBittorrent's SOCKS5 proxy at `10.200.19.10:8080` (or your
    `QBIT_EGRESS_ENGINE_IP`) instead of an nginx relay on `lanepool`.
+   Create `qbit-egress` with `--internal` so qBittorrent has no route out
+   except through lanepool, and give its proxy user sticky sessions (e.g.
+   1440 minutes), no connection limits, UDP on and a long idle timeout; the
+   overlay file lists the details. A sticky session keeps its lane across
+   engine restarts while that lane is up.
    If Dokploy's UI only accepts one compose file, set **Command** to (replace
    `-p` with your compose project name if needed):
 

@@ -465,9 +465,9 @@ func (s *Server) manageKeys(ctx context.Context) {
 	}
 }
 
-// failingKeys returns keys (at most two per run) that recently failed on at
-// least threshold lanes while no lane is up on them, and that weren't created
-// or rotated in the last 30 minutes.
+// failingKeys returns managed keys (at most two per run) that recently failed
+// on at least threshold lanes while no lane is up on them, and that weren't
+// created or rotated in the last 30 minutes.
 func (s *Server) failingKeys(ctx context.Context, threshold int) []int64 {
 	s.mu.RLock()
 	rep := s.report
@@ -505,11 +505,14 @@ func (s *Server) failingKeys(ctx context.Context, threshold int) []int64 {
 		if n < threshold || up[k] || len(out) >= 2 {
 			continue
 		}
-		var fresh bool
-		s.db.QueryRow(ctx, `SELECT created_at > now() - interval '30 minutes'
+		// Only keys lanepool registered itself are rotated. A key pasted in by
+		// hand may also be configured on another device (a router, gluetun);
+		// rotating it would delete it at Surfshark and cut that device off.
+		var managed, fresh bool
+		s.db.QueryRow(ctx, `SELECT managed, created_at > now() - interval '30 minutes'
 			OR COALESCE(rotated_at > now() - interval '30 minutes', false)
-			FROM provider_keys WHERE id = $1`, k).Scan(&fresh)
-		if !fresh {
+			FROM provider_keys WHERE id = $1`, k).Scan(&managed, &fresh)
+		if managed && !fresh {
 			out = append(out, k)
 		}
 	}

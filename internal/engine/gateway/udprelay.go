@@ -312,8 +312,15 @@ func (s *Server) handleSOCKSAssociate(c net.Conn, req *request, username, passwo
 			}
 			_, err = relayConn.WriteToUDP(wrapped, &net.UDPAddr{IP: clientIP.AsSlice(), Port: int(cp)})
 			if err != nil {
-				cancel()
-				return
+				if errors.Is(err, net.ErrClosed) {
+					cancel()
+					return
+				}
+				// A transient error (e.g. ENOBUFS under a DHT burst) loses one
+				// datagram; ending the association would drop every DHT node
+				// and uTP peer the client has.
+				s.logUDPDrop(relayLog, "client_write", err)
+				continue
 			}
 			lc.down.Add(int64(len(wrapped)))
 			s.Policy.AddUsage(uid, laneID, 0, int64(len(wrapped)))

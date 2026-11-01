@@ -104,7 +104,10 @@ function ConnectForm() {
             delete keys at Surfshark, which <strong className="text-foreground">ends every session</strong> using them
             immediately (the only way to clear old sessions, since WireGuard has no disconnect);
           </li>
-          <li>rotate a key when its lanes keep failing, renew keys before they expire, and add keys as lanes grow.</li>
+          <li>
+            rotate a key it created when its lanes keep failing, renew keys before they expire, and add keys as lanes
+            grow. Keys you added by hand are never rotated automatically.
+          </li>
         </ul>
         <p>
           This uses the account API that Surfshark's own apps use. It isn't officially documented, so it could change.
@@ -234,8 +237,8 @@ function AutoManageForm({ account }: { account: SurfsharkAccount }) {
           <span className="block text-sm font-medium">Manage keys automatically</span>
           <span className="block text-xs text-muted-foreground">
             Every 5 minutes: renew keys that expire within 3 days, generate keys when there are more lanes than the
-            limit per key allows, and rotate a key when its lanes keep failing (the old key is deleted at Surfshark,
-            ending its sessions).
+            limit per key allows, and rotate a key lanepool created when its lanes keep failing (the old key is deleted
+            at Surfshark, ending its sessions). Keys you added by hand are left alone.
           </span>
         </span>
         <Switch
