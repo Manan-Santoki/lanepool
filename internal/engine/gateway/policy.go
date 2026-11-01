@@ -151,6 +151,7 @@ type Policy struct {
 	failures  map[string]int // lane|domain -> consecutive dial failures
 	settings  protocol.EngineSettings
 	authFails map[netip.Addr]*failWindow
+	loaded    bool // a configuration has been applied
 }
 
 type usageKey struct {
@@ -202,6 +203,7 @@ func (p *Policy) Apply(settings protocol.EngineSettings, users []protocol.UserSp
 	p.users = next
 	p.burned = burned
 	p.settings = settings
+	p.loaded = true
 }
 
 // UpdateUsedBytes refreshes quota counters from control without resetting sessions.
@@ -240,6 +242,15 @@ func (p *Policy) Authenticate(username, password string, client netip.Addr) (*us
 	now := time.Now()
 
 	p.mu.Lock()
+	if !p.loaded {
+		// The proxy listens before the first config arrives from control. A
+		// client that connects in that window has done nothing wrong: refuse
+		// without counting it towards the per-IP lockout, or a busy client
+		// (a torrent client opens many connections) would be locked out for
+		// five minutes after every engine restart.
+		p.mu.Unlock()
+		return nil, params, protocol.ResultPaused
+	}
 	if w := p.authFails[client]; w != nil && now.Before(w.reset) && w.count >= 10 {
 		p.mu.Unlock()
 		return nil, params, protocol.ResultAuthFailed // too many failures from this IP

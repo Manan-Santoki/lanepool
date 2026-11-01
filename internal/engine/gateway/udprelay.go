@@ -134,7 +134,10 @@ func (s *Server) handleSOCKSAssociate(c net.Conn, req *request, username, passwo
 	req.rec.Protocol = "socks5-udp"
 	if res == protocol.ResultAuthFailed || u == nil {
 		socksReply(c, socksFailure)
-		s.finish(req, protocol.ResultAuthFailed, nil)
+		if res != protocol.ResultPaused {
+			res = protocol.ResultAuthFailed
+		}
+		s.finish(req, res, nil)
 		return
 	}
 	req.user = u

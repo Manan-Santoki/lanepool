@@ -746,7 +746,10 @@ func (s *Server) handleSOCKS(c net.Conn, br *bufio.Reader, req *request) {
 	if u, _, res := s.Policy.Authenticate(string(uname), string(passwd), req.client); res == protocol.ResultAuthFailed || u == nil {
 		c.Write([]byte{0x01, 0x01})
 		req.rec.Username = ParseUsername(string(uname)).Username
-		s.finish(req, protocol.ResultAuthFailed, nil)
+		if res != protocol.ResultPaused {
+			res = protocol.ResultAuthFailed
+		}
+		s.finish(req, res, nil)
 		return
 	}
 	c.Write([]byte{0x01, 0x00})
